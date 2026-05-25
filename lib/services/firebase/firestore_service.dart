@@ -146,13 +146,14 @@ class FirestoreService {
       query = query.where('date',
           isLessThanOrEqualTo: Timestamp.fromDate(to));
     }
-    if (accountId != null) {
-      query = query.where('accountId', isEqualTo: accountId);
-    }
     return query
         .orderBy('date', descending: true)
+        .limit(500)
         .snapshots()
         .map((s) => s.docs
+            .where((doc) =>
+                accountId == null ||
+                (doc.data() as Map<String, dynamic>)['accountId'] == accountId)
             .map(app_model.Transaction.fromFirestore)
             .toList());
   }
