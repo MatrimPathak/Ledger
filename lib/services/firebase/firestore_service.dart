@@ -36,7 +36,7 @@ class FirestoreService {
   }
 
   Future<void> markOnboardingComplete(String uid) async {
-    await _userDoc(uid).update({'onboardingComplete': true});
+    await _userDoc(uid).set({'onboardingComplete': true}, SetOptions(merge: true));
   }
 
   // Seed default categories (batch write, called once on first login)
