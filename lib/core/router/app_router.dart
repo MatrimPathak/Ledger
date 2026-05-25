@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../providers/auth_provider.dart';
@@ -15,27 +18,48 @@ import '../../features/settings/screens/settings_screen.dart';
 import '../../widgets/main_shell.dart';
 import '../../models/transaction.dart';
 
-final routerProvider = Provider<GoRouter>((ref) {
-  final authState = ref.watch(authStateProvider);
+class _RouterNotifier extends ChangeNotifier {
+  _RouterNotifier(Stream<User?> stream) {
+    notifyListeners();
+    _sub = stream.listen((_) => notifyListeners());
+  }
+  late final StreamSubscription<User?> _sub;
 
-  return GoRouter(
+  @override
+  void dispose() {
+    _sub.cancel();
+    super.dispose();
+  }
+}
+
+final routerProvider = Provider<GoRouter>((ref) {
+  final authService = ref.read(authServiceProvider);
+  final notifier = _RouterNotifier(authService.authStateChanges);
+  ref.onDispose(notifier.dispose);
+
+  final router = GoRouter(
     initialLocation: '/login',
+    refreshListenable: notifier,
     redirect: (context, state) async {
-      final isLoggedIn = authState.value != null;
+      final user = FirebaseAuth.instance.currentUser;
+      final isLoggedIn = user != null;
       final location = state.matchedLocation;
 
       if (!isLoggedIn) {
         return location == '/login' ? null : '/login';
       }
 
-      // Check if onboarding is complete
       if (isLoggedIn && location == '/login') {
-        final firestoreService = ref.read(firestoreServiceProvider);
-        final profile = await firestoreService.getProfile(authState.value!.uid);
-        if (profile == null || !profile.onboardingComplete) {
-          return '/onboarding';
+        try {
+          final firestoreService = ref.read(firestoreServiceProvider);
+          final profile = await firestoreService.getProfile(user.uid);
+          if (profile == null || !profile.onboardingComplete) {
+            return '/onboarding';
+          }
+          return '/home';
+        } catch (_) {
+          return '/home';
         }
-        return '/home';
       }
 
       return null;
@@ -98,4 +122,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
     ],
   );
+
+  ref.onDispose(router.dispose);
+  return router;
 });
