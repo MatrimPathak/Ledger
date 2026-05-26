@@ -19,10 +19,15 @@ void main() async {
 
   await NotificationService.initialize();
 
-  // Forward API key to SharedPreferences so the background SMS isolate can read it
+  // Seed SharedPreferences with the .env key only if the user hasn't saved
+  // their own key yet — this preserves the user-set key across restarts.
+  // SharedPreferences is also read by the background SMS isolate.
   final prefs = await SharedPreferences.getInstance();
-  final apiKey = dotenv.env['CLAUDE_API_KEY'] ?? AppConstants.claudeApiKeyPlaceholder;
-  await prefs.setString(AppConstants.prefKeyClaudeApiKey, apiKey);
+  final existingKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ?? '';
+  if (existingKey.isEmpty || existingKey == AppConstants.claudeApiKeyPlaceholder) {
+    final envKey = dotenv.env['CLAUDE_API_KEY'] ?? AppConstants.claudeApiKeyPlaceholder;
+    await prefs.setString(AppConstants.prefKeyClaudeApiKey, envKey);
+  }
 
   runApp(
     const ProviderScope(

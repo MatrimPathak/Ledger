@@ -44,11 +44,22 @@ final analyticsInsightsProvider =
       ? AppConstants.claudeApiKeyPlaceholder
       : rawKey.trim();
 
+  if (apiKey == AppConstants.claudeApiKeyPlaceholder || apiKey.isEmpty) {
+    return [
+      const AnalyticsInsight(
+        title: 'Add your Claude API key',
+        body: 'Go to Settings → Claude API Key and enter your key from console.anthropic.com.',
+        type: 'tip',
+      )
+    ];
+  }
+
   final claudeService = ClaudeService(apiKey);
-  return claudeService.generateInsights(
+  final results = await claudeService.generateInsightsOrThrow(
     transactionSummary: summary,
     currency: currency,
   );
+  return results;
 });
 
 List<Map<String, dynamic>> _buildSummary(List<app_model.Transaction> transactions) {
