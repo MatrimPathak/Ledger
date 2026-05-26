@@ -4,7 +4,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'app.dart';
-import 'core/constants/app_constants.dart';
+import 'core/utils/claude_api_key_seed.dart';
 import 'firebase_options.dart';
 import 'services/notification/notification_service.dart';
 
@@ -23,11 +23,10 @@ void main() async {
   // their own key yet — this preserves the user-set key across restarts.
   // SharedPreferences is also read by the background SMS isolate.
   final prefs = await SharedPreferences.getInstance();
-  final existingKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ?? '';
-  if (existingKey.isEmpty || existingKey == AppConstants.claudeApiKeyPlaceholder) {
-    final envKey = dotenv.env['CLAUDE_API_KEY'] ?? AppConstants.claudeApiKeyPlaceholder;
-    await prefs.setString(AppConstants.prefKeyClaudeApiKey, envKey);
-  }
+  await seedClaudeApiKeyIfNeeded(
+    prefs: prefs,
+    envKey: dotenv.env['CLAUDE_API_KEY'],
+  );
 
   runApp(
     const ProviderScope(

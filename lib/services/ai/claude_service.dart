@@ -5,6 +5,13 @@ import '../../core/constants/app_constants.dart';
 import '../../models/account.dart';
 import '../../models/payment_mode.dart';
 
+typedef ClaudePost = Future<http.Response> Function(
+  Uri url, {
+  Map<String, String>? headers,
+  Object? body,
+  Encoding? encoding,
+});
+
 class ParsedSmsTransaction {
   final String title;
   final double amount;
@@ -48,8 +55,9 @@ class AnalyticsInsight {
 
 class ClaudeService {
   final String apiKey;
+  final ClaudePost _post;
 
-  ClaudeService(this.apiKey);
+  ClaudeService(this.apiKey, {ClaudePost? post}) : _post = post ?? http.post;
 
   Future<ParsedSmsTransaction?> parseSmsTransaction({
     required String smsBody,
@@ -87,24 +95,22 @@ Return JSON:
 }''';
 
     try {
-      final response = await http
-          .post(
-            Uri.parse(AppConstants.claudeApiUrl),
-            headers: {
-              'x-api-key': apiKey,
-              'anthropic-version': AppConstants.claudeApiVersion,
-              'content-type': 'application/json',
-            },
-            body: jsonEncode({
-              'model': AppConstants.claudeSmsFastModel,
-              'max_tokens': 256,
-              'system': 'You are a financial SMS parser. Return ONLY valid JSON.',
-              'messages': [
-                {'role': 'user', 'content': prompt}
-              ],
-            }),
-          )
-          .timeout(const Duration(seconds: 30));
+      final response = await _post(
+        Uri.parse(AppConstants.claudeApiUrl),
+        headers: {
+          'x-api-key': apiKey,
+          'anthropic-version': AppConstants.claudeApiVersion,
+          'content-type': 'application/json',
+        },
+        body: jsonEncode({
+          'model': AppConstants.claudeSmsFastModel,
+          'max_tokens': 256,
+          'system': 'You are a financial SMS parser. Return ONLY valid JSON.',
+          'messages': [
+            {'role': 'user', 'content': prompt}
+          ],
+        }),
+      ).timeout(const Duration(seconds: 30));
 
       if (response.statusCode != 200) return null;
 
@@ -162,7 +168,7 @@ Return JSON:
     } on TimeoutException {
       throw Exception(
           'Request timed out. Please check your connection and try again.');
-    } catch (e) {
+    } catch (_) {
       rethrow;
     }
   }
@@ -187,25 +193,23 @@ Return ONLY a JSON array (no markdown):
 ]
 Return 4-6 most valuable insights.''';
 
-    final response = await http
-        .post(
-          Uri.parse(AppConstants.claudeApiUrl),
-          headers: {
-            'x-api-key': apiKey,
-            'anthropic-version': AppConstants.claudeApiVersion,
-            'content-type': 'application/json',
-          },
-          body: jsonEncode({
-            'model': AppConstants.claudeAnalyticsModel,
-            'max_tokens': 1024,
-            'system':
-                'You are a personal finance advisor. Return ONLY a valid JSON array of insights.',
-            'messages': [
-              {'role': 'user', 'content': prompt}
-            ],
-          }),
-        )
-        .timeout(const Duration(seconds: 30));
+    final response = await _post(
+      Uri.parse(AppConstants.claudeApiUrl),
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': AppConstants.claudeApiVersion,
+        'content-type': 'application/json',
+      },
+      body: jsonEncode({
+        'model': AppConstants.claudeAnalyticsModel,
+        'max_tokens': 1024,
+        'system':
+            'You are a personal finance advisor. Return ONLY a valid JSON array of insights.',
+        'messages': [
+          {'role': 'user', 'content': prompt}
+        ],
+      }),
+    ).timeout(const Duration(seconds: 30));
 
     if (response.statusCode == 401) {
       throw Exception('Invalid API key. Please check your key in Settings.');
