@@ -104,6 +104,10 @@ class FirestoreService {
     return mode;
   }
 
+  Future<void> updatePaymentMode(PaymentMode mode) async {
+    await _paymentModes(mode.userId).doc(mode.id).update(mode.toFirestore());
+  }
+
   Future<void> deletePaymentMode(String uid, String modeId) async {
     await _paymentModes(uid).doc(modeId).delete();
   }

@@ -60,6 +60,7 @@ class PaymentMode {
   final String title;
   final String? lastFourDigits;
   final String? upiId;
+  final String? bankHandle;
   final DateTime createdAt;
 
   const PaymentMode({
@@ -70,6 +71,7 @@ class PaymentMode {
     required this.title,
     this.lastFourDigits,
     this.upiId,
+    this.bankHandle,
     required this.createdAt,
   });
 
@@ -83,6 +85,7 @@ class PaymentMode {
       title: data['title'] ?? '',
       lastFourDigits: data['lastFourDigits'],
       upiId: data['upiId'],
+      bankHandle: data['bankHandle'],
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
     );
   }
@@ -94,24 +97,28 @@ class PaymentMode {
         'title': title,
         'lastFourDigits': lastFourDigits,
         'upiId': upiId,
+        'bankHandle': bankHandle,
         'createdAt': Timestamp.fromDate(createdAt),
       };
 
   PaymentMode copyWith({
     PaymentModeType? type,
-    String? accountId,
+    String? Function()? accountId,
     String? title,
-    String? lastFourDigits,
-    String? upiId,
+    String? Function()? lastFourDigits,
+    String? Function()? upiId,
+    String? Function()? bankHandle,
   }) =>
       PaymentMode(
         id: id,
         userId: userId,
         type: type ?? this.type,
-        accountId: accountId ?? this.accountId,
+        accountId: accountId != null ? accountId() : this.accountId,
         title: title ?? this.title,
-        lastFourDigits: lastFourDigits ?? this.lastFourDigits,
-        upiId: upiId ?? this.upiId,
+        lastFourDigits:
+            lastFourDigits != null ? lastFourDigits() : this.lastFourDigits,
+        upiId: upiId != null ? upiId() : this.upiId,
+        bankHandle: bankHandle != null ? bankHandle() : this.bankHandle,
         createdAt: createdAt,
       );
 }
