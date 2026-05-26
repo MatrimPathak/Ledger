@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/utils/date_formatter.dart';
+import '../../../core/utils/payment_mode_filters.dart';
 import '../../../models/account.dart';
 import '../../../models/category.dart';
 import '../../../models/payment_mode.dart';
@@ -193,15 +194,10 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
     final categories = categoriesAsync.value ?? [];
     final accounts = accountsAsync.value ?? [];
     final allModes = paymentModesAsync.value ?? [];
-    final filteredModes = _accountId != null
-        ? allModes
-            .where((m) =>
-                m.accountId == _accountId ||
-                m.type == PaymentModeType.cash ||
-                (m.type == PaymentModeType.atm &&
-                    (m.accountId == null || m.accountId == _accountId)))
-            .toList()
-        : allModes;
+    final filteredModes = paymentModesForTransaction(
+      allModes,
+      accountId: _accountId,
+    );
 
     final Category? selectedCategory = _categoryId != null
         ? _findCategory(categories, _categoryId!)

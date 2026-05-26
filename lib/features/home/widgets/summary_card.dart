@@ -6,6 +6,50 @@ import '../../../models/account.dart';
 import '../../../models/transaction.dart';
 import '../../../providers/transactions_provider.dart';
 
+class SummaryBalance {
+  final double amount;
+  final String label;
+  final String display;
+
+  const SummaryBalance({
+    required this.amount,
+    required this.label,
+    required this.display,
+  });
+}
+
+SummaryBalance resolveSummaryBalance({
+  required List<Account> accounts,
+  required String? accountId,
+  required String currency,
+}) {
+  if (accountId != null) {
+    final account = accounts.where((a) => a.id == accountId).firstOrNull;
+    final amount = account?.balance ?? 0.0;
+    return SummaryBalance(
+      amount: amount,
+      label: account?.title ?? 'Account Balance',
+      display: CurrencyFormatter.format(amount, currency: currency),
+    );
+  }
+
+  final currencies = accounts.map((a) => a.currency).toSet();
+  if (currencies.length > 1) {
+    return const SummaryBalance(
+      amount: 0.0,
+      label: 'Total Balance',
+      display: 'Multiple Currencies',
+    );
+  }
+
+  final amount = accounts.fold(0.0, (sum, account) => sum + account.balance);
+  return SummaryBalance(
+    amount: amount,
+    label: 'Total Balance',
+    display: CurrencyFormatter.format(amount, currency: currency),
+  );
+}
+
 class SummaryCard extends StatelessWidget {
   final List<Transaction> transactions;
   final List<Account> accounts;
@@ -33,28 +77,11 @@ class SummaryCard extends StatelessWidget {
       }
     }
 
-    // Real running balance from account(s), not just this month's net
-    final double totalBalance;
-    final String balanceLabel;
-    final String balanceDisplay;
-    if (filter.accountId != null) {
-      final acct = accounts.where((a) => a.id == filter.accountId).firstOrNull;
-      totalBalance = acct?.balance ?? 0;
-      balanceLabel = acct?.title ?? 'Account Balance';
-      balanceDisplay = CurrencyFormatter.format(totalBalance, currency: currency);
-    } else {
-      final currencies = accounts.map((a) => a.currency).toSet();
-      if (currencies.length > 1) {
-        totalBalance = 0;
-        balanceLabel = 'Total Balance';
-        balanceDisplay = 'Multiple Currencies';
-      } else {
-        totalBalance = accounts.fold(0.0, (sum, a) => sum + a.balance);
-        balanceLabel = 'Total Balance';
-        balanceDisplay =
-            CurrencyFormatter.format(totalBalance, currency: currency);
-      }
-    }
+    final balance = resolveSummaryBalance(
+      accounts: accounts,
+      accountId: filter.accountId,
+      currency: currency,
+    );
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -92,7 +119,7 @@ class SummaryCard extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    balanceLabel,
+                    balance.label,
                     style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 14,
@@ -120,7 +147,7 @@ class SummaryCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            balanceDisplay,
+            balance.display,
             style: const TextStyle(
               color: Colors.white,
               fontSize: 32,

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/utils/date_formatter.dart';
+import '../../../models/account.dart';
 import '../../../models/category.dart';
 import '../../../models/payment_mode.dart';
 import '../../../models/transaction.dart';
@@ -13,6 +14,17 @@ import '../widgets/account_month_filter.dart';
 import '../widgets/category_bar_chart.dart';
 import '../widgets/summary_card.dart';
 import '../widgets/transaction_list_item.dart';
+
+String resolveHomeCurrency(List<Account> accounts, String? accountId) {
+  if (accounts.isEmpty) return 'INR';
+  if (accountId == null) return accounts.first.currency;
+
+  return accounts
+          .where((account) => account.id == accountId)
+          .map((account) => account.currency)
+          .firstOrNull ??
+      accounts.first.currency;
+}
 
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
@@ -29,18 +41,7 @@ class HomeScreen extends ConsumerWidget {
     final accounts = accountsAsync.value ?? [];
     final categories = categoriesAsync.value ?? [];
     final paymentModes = paymentModesAsync.value ?? [];
-    final String currency;
-    if (accounts.isEmpty) {
-      currency = 'INR';
-    } else if (filter.accountId != null) {
-      currency = accounts
-              .where((a) => a.id == filter.accountId)
-              .map((a) => a.currency)
-              .firstOrNull ??
-          accounts.first.currency;
-    } else {
-      currency = accounts.first.currency;
-    }
+    final currency = resolveHomeCurrency(accounts, filter.accountId);
 
     return Scaffold(
       body: txAsync.when(
