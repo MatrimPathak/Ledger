@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/ai/claude_service.dart';
 import '../core/constants/app_constants.dart';
@@ -32,8 +33,12 @@ final analyticsInsightsProvider =
   final summary = _buildSummary(transactions);
   final currency = accounts.isNotEmpty ? accounts.first.currency : 'INR';
 
+  const storage = FlutterSecureStorage();
+  final secureKey =
+      await storage.read(key: AppConstants.prefKeyClaudeApiKey);
   final prefs = await SharedPreferences.getInstance();
-  final rawKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ??
+  final rawKey = secureKey ??
+      prefs.getString(AppConstants.prefKeyClaudeApiKey) ??
       AppConstants.claudeApiKeyPlaceholder;
   final apiKey = rawKey.trim().isEmpty
       ? AppConstants.claudeApiKeyPlaceholder

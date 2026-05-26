@@ -1,7 +1,11 @@
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/constants/app_constants.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/firestore_provider.dart';
@@ -118,14 +122,15 @@ class SettingsScreen extends ConsumerWidget {
                   onChanged: (v) => _toggleAutoDetect(context, ref, v),
                 ),
               ),
-              // About
-              _SectionHeader('About'),
+              // AI
+              _SectionHeader('AI'),
               _SettingsTile(
-                icon: Icons.info_outline,
-                title: 'Version',
-                subtitle: '1.0.0',
+                icon: Icons.key_outlined,
+                title: 'Claude API Key',
+                subtitle: 'Required for AI insights',
+                onTap: () => _editApiKey(context),
               ),
-              // Danger zone
+              // Account
               _SectionHeader('Account'),
               _SettingsTile(
                 icon: Icons.logout,
@@ -141,12 +146,74 @@ class SettingsScreen extends ConsumerWidget {
                 titleColor: AppColors.expenseRedDark,
                 onTap: () => _deleteAccount(context, ref),
               ),
-              const SizedBox(height: 100),
+              // Version footer
+              const SizedBox(height: 32),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 40),
+                child: FutureBuilder<PackageInfo>(
+                  future: PackageInfo.fromPlatform(),
+                  builder: (context, snapshot) {
+                    final version = snapshot.data?.version ?? '1.0.0';
+                    return Text(
+                      'Ledger v$version',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurface.withOpacity(0.3),
+                      ),
+                    );
+                  },
+                ),
+              ),
             ]),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _editApiKey(BuildContext context) async {
+    const storage = FlutterSecureStorage();
+    final current =
+        await storage.read(key: AppConstants.prefKeyClaudeApiKey) ?? '';
+
+    if (!context.mounted) return;
+    final ctrl = TextEditingController(text: current);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Claude API Key'),
+        content: TextField(
+          controller: ctrl,
+          obscureText: true,
+          decoration: const InputDecoration(
+            hintText: 'sk-ant-...',
+            helperText: 'Get your key at console.anthropic.com',
+          ),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    ctrl.dispose();
+    if (result == null) return;
+    await storage.write(key: AppConstants.prefKeyClaudeApiKey, value: result);
+    // Mirror to SharedPreferences so the background SMS isolate can read it.
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(AppConstants.prefKeyClaudeApiKey, result);
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('API key saved')),
+      );
+    }
   }
 
   Future<void> _toggleAutoDetect(
@@ -167,8 +234,34 @@ class SettingsScreen extends ConsumerWidget {
   }
 
   Future<void> _signOut(BuildContext context, WidgetRef ref) async {
-    await ref.read(authServiceProvider).signOut();
-    if (context.mounted) context.go('/login');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Sign Out?'),
+        content: const Text('You will be returned to the login screen.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Sign Out'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await ref.read(authServiceProvider).signOut();
+      if (context.mounted) context.go('/login');
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to sign out: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _deleteAccount(BuildContext context, WidgetRef ref) async {
@@ -200,7 +293,6 @@ class SettingsScreen extends ConsumerWidget {
     if (user == null) return;
 
     try {
-      // Delete auth account first, then Firestore data
       await ref.read(authServiceProvider).deleteAccount();
       await ref.read(firestoreServiceProvider).deleteAllUserData(user.uid);
     } catch (e) {
@@ -266,7 +358,8 @@ class _SettingsTile extends StatelessWidget {
       subtitle: subtitle != null
           ? Text(subtitle!, style: theme.textTheme.bodySmall)
           : null,
-      trailing: trailing ?? (onTap != null ? const Icon(Icons.chevron_right) : null),
+      trailing: trailing ??
+          (onTap != null ? const Icon(Icons.chevron_right) : null),
       onTap: onTap,
     );
   }
