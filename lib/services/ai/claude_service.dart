@@ -139,52 +139,8 @@ Return JSON:
     if (apiKey == AppConstants.claudeApiKeyPlaceholder || apiKey.isEmpty) {
       return _demoInsights();
     }
-
-    final prompt = '''
-You are a personal finance advisor for an Indian user. Analyze the spending data and return a JSON array of insights.
-
-Currency: $currency
-Data: ${jsonEncode(transactionSummary)}
-
-Return ONLY a JSON array (no markdown):
-[
-  {
-    "title": "string (max 8 words)",
-    "body": "1-2 specific actionable sentences",
-    "type": "tip" | "warning" | "positive" | "neutral"
-  }
-]
-Return 4-6 most valuable insights.''';
-
     try {
-      final response = await http
-          .post(
-            Uri.parse(AppConstants.claudeApiUrl),
-            headers: {
-              'x-api-key': apiKey,
-              'anthropic-version': AppConstants.claudeApiVersion,
-              'content-type': 'application/json',
-            },
-            body: jsonEncode({
-              'model': AppConstants.claudeAnalyticsModel,
-              'max_tokens': 1024,
-              'system':
-                  'You are a personal finance advisor. Return ONLY a valid JSON array of insights.',
-              'messages': [
-                {'role': 'user', 'content': prompt}
-              ],
-            }),
-          )
-          .timeout(const Duration(seconds: 30));
-
-      if (response.statusCode != 200) return _demoInsights();
-
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
-      final content = (data['content'] as List).first['text'] as String;
-      final jsonList = jsonDecode(content.trim()) as List;
-      return jsonList
-          .map((e) => AnalyticsInsight.fromJson(e as Map<String, dynamic>))
-          .toList();
+      return await _fetchInsights(transactionSummary, currency);
     } on TimeoutException {
       return _demoInsights();
     } catch (_) {
@@ -201,7 +157,20 @@ Return 4-6 most valuable insights.''';
     if (apiKey == AppConstants.claudeApiKeyPlaceholder || apiKey.isEmpty) {
       return _demoInsights();
     }
+    try {
+      return await _fetchInsights(transactionSummary, currency);
+    } on TimeoutException {
+      throw Exception(
+          'Request timed out. Please check your connection and try again.');
+    } catch (e) {
+      rethrow;
+    }
+  }
 
+  Future<List<AnalyticsInsight>> _fetchInsights(
+    List<Map<String, dynamic>> transactionSummary,
+    String currency,
+  ) async {
     final prompt = '''
 You are a personal finance advisor for an Indian user. Analyze the spending data and return a JSON array of insights.
 
@@ -242,15 +211,20 @@ Return 4-6 most valuable insights.''';
       throw Exception('Invalid API key. Please check your key in Settings.');
     }
     if (response.statusCode != 200) {
-      throw Exception('Claude API error ${response.statusCode}. Please try again.');
+      throw Exception(
+          'Claude API error ${response.statusCode}. Please try again.');
     }
 
-    final data = jsonDecode(response.body) as Map<String, dynamic>;
-    final content = (data['content'] as List).first['text'] as String;
-    final jsonList = jsonDecode(content.trim()) as List;
-    return jsonList
-        .map((e) => AnalyticsInsight.fromJson(e as Map<String, dynamic>))
-        .toList();
+    try {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final content = (data['content'] as List).first['text'] as String;
+      final jsonList = jsonDecode(content.trim()) as List;
+      return jsonList
+          .map((e) => AnalyticsInsight.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } catch (_) {
+      throw Exception('Invalid response from Claude API. Please try again.');
+    }
   }
 
   List<AnalyticsInsight> _demoInsights() => [

@@ -44,6 +44,10 @@ final analyticsInsightsProvider =
       ? AppConstants.claudeApiKeyPlaceholder
       : rawKey.trim();
 
+  // Fast-path: return a friendly card without constructing ClaudeService.
+  // ClaudeService.generateInsightsOrThrow has the same guard, but checking
+  // here avoids an unnecessary object allocation and keeps the provider
+  // responsible for the "key not configured" user-facing message.
   if (apiKey == AppConstants.claudeApiKeyPlaceholder || apiKey.isEmpty) {
     return [
       const AnalyticsInsight(
