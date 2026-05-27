@@ -5,6 +5,14 @@ import '../../core/constants/app_constants.dart';
 import '../../models/account.dart';
 import '../../models/payment_mode.dart';
 
+// Strip markdown code fences that models return despite being asked not to.
+String _stripMarkdown(String text) {
+  final stripped = text.trim();
+  final fence = RegExp(r'^```(?:json)?\s*([\s\S]*?)```$', multiLine: false);
+  final match = fence.firstMatch(stripped);
+  return match != null ? match.group(1)!.trim() : stripped;
+}
+
 class ParsedSmsTransaction {
   final String title;
   final double amount;
@@ -110,7 +118,7 @@ Return JSON:
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final content = (data['content'] as List).first['text'] as String;
-      final json = jsonDecode(content.trim()) as Map<String, dynamic>;
+      final json = jsonDecode(_stripMarkdown(content)) as Map<String, dynamic>;
 
       final confidence = (json['confidence'] as num?)?.toDouble() ?? 0.0;
       if (confidence < AppConstants.smsConfidenceThreshold / 100.0) return null;
@@ -211,14 +219,20 @@ Return 4-6 most valuable insights.''';
       throw Exception('Invalid API key. Please check your key in Settings.');
     }
     if (response.statusCode != 200) {
-      throw Exception(
-          'Claude API error ${response.statusCode}. Please try again.');
+      String detail = 'Claude API error ${response.statusCode}.';
+      try {
+        final errBody = jsonDecode(response.body) as Map<String, dynamic>;
+        final errMsg =
+            (errBody['error'] as Map<String, dynamic>?)?['message'] as String?;
+        if (errMsg != null && errMsg.isNotEmpty) detail = errMsg;
+      } catch (_) {}
+      throw Exception(detail);
     }
 
     try {
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       final content = (data['content'] as List).first['text'] as String;
-      final jsonList = jsonDecode(content.trim()) as List;
+      final jsonList = jsonDecode(_stripMarkdown(content)) as List;
       return jsonList
           .map((e) => AnalyticsInsight.fromJson(e as Map<String, dynamic>))
           .toList();
