@@ -211,8 +211,14 @@ Return 4-6 most valuable insights.''';
       throw Exception('Invalid API key. Please check your key in Settings.');
     }
     if (response.statusCode != 200) {
-      throw Exception(
-          'Claude API error ${response.statusCode}. Please try again.');
+      String detail = 'Claude API error ${response.statusCode}.';
+      try {
+        final errBody = jsonDecode(response.body) as Map<String, dynamic>;
+        final errMsg =
+            (errBody['error'] as Map<String, dynamic>?)?['message'] as String?;
+        if (errMsg != null && errMsg.isNotEmpty) detail = errMsg;
+      } catch (_) {}
+      throw Exception(detail);
     }
 
     try {
