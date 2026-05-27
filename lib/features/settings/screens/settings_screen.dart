@@ -229,8 +229,11 @@ class SettingsScreen extends ConsumerWidget {
         }
         return;
       }
+      await ref.read(settingsProvider.notifier).setAutoDetect(true);
+      SmsService().startListening();
+    } else {
+      await ref.read(settingsProvider.notifier).setAutoDetect(false);
     }
-    await ref.read(settingsProvider.notifier).setAutoDetect(value);
   }
 
   Future<void> _signOut(BuildContext context, WidgetRef ref) async {

@@ -7,6 +7,7 @@ import 'app.dart';
 import 'core/constants/app_constants.dart';
 import 'firebase_options.dart';
 import 'services/notification/notification_service.dart';
+import 'services/sms/sms_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +28,10 @@ void main() async {
   if (existingKey.isEmpty || existingKey == AppConstants.claudeApiKeyPlaceholder) {
     final envKey = dotenv.env['CLAUDE_API_KEY'] ?? AppConstants.claudeApiKeyPlaceholder;
     await prefs.setString(AppConstants.prefKeyClaudeApiKey, envKey);
+  }
+
+  if (prefs.getBool(AppConstants.prefKeyAutoDetect) == true) {
+    SmsService().startListening();
   }
 
   runApp(
