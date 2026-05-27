@@ -51,10 +51,6 @@ void main() async {
     SmsService().startListening();
   }
 
-  if (prefs.getBool(AppConstants.prefKeyAutoDetect) == true) {
-    SmsService().startListening();
-  }
-
   runApp(
     const ProviderScope(
       child: LedgerApp(),
