@@ -11,8 +11,8 @@ class AppConstants {
   static const String claudeApiUrl =
       'https://api.anthropic.com/v1/messages';
   static const String claudeApiVersion = '2023-06-01';
-  static const String claudeSmsFastModel = 'claude-haiku-4-5-20251001';
-  static const String claudeAnalyticsModel = 'claude-haiku-4-5-20251001';
+  static const String claudeSmsFastModel = 'claude-3-5-haiku-20241022';
+  static const String claudeAnalyticsModel = 'claude-3-5-haiku-20241022';
 
   static const String prefKeyThemeMode = 'theme_mode';
   static const String prefKeyNotifications = 'notifications_enabled';
