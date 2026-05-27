@@ -107,6 +107,10 @@ class FirestoreService {
     return mode;
   }
 
+  Future<void> updatePaymentMode(PaymentMode mode) async {
+    await _paymentModes(mode.userId).doc(mode.id).update(mode.toFirestore());
+  }
+
   Future<void> deletePaymentMode(String uid, String modeId) async {
     await _paymentModes(uid).doc(modeId).delete();
   }
@@ -149,20 +153,21 @@ class FirestoreService {
       query = query.where('date',
           isLessThanOrEqualTo: Timestamp.fromDate(to));
     }
-    if (accountId != null) {
-      query = query.where('accountId', isEqualTo: accountId);
-    }
     return query
         .orderBy('date', descending: true)
+        .limit(500)
         .snapshots()
         .map((s) => s.docs
+            .where((doc) =>
+                accountId == null ||
+                (doc.data() as Map<String, dynamic>)['accountId'] == accountId)
             .map(app_model.Transaction.fromFirestore)
             .toList());
   }
 
   Future<app_model.Transaction> createTransaction(app_model.Transaction tx) async {
-    await _transactions(tx.userId).add(tx.toFirestore());
-    return tx;
+    final docRef = await _transactions(tx.userId).add(tx.toFirestore());
+    return tx.copyWith(id: docRef.id);
   }
 
   Future<void> updateTransaction(app_model.Transaction tx) async {

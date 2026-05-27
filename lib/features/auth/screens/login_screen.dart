@@ -47,7 +47,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         if (mounted) context.go('/home');
       }
     } catch (e) {
-      if (mounted) setState(() => _error = 'Sign in failed. Please try again.');
+      setState(() => _error = 'Sign in failed. Please try again.');
     } finally {
       if (mounted) setState(() => _loading = false);
     }

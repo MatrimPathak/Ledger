@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/ai/claude_service.dart';
 import '../core/constants/app_constants.dart';
@@ -8,7 +9,7 @@ import 'accounts_provider.dart';
 import '../models/transaction.dart' as app_model;
 
 final analyticsInsightsProvider =
-    FutureProvider.autoDispose<List<AnalyticsInsight>>((ref) async {
+    FutureProvider<List<AnalyticsInsight>>((ref) async {
   final user = ref.watch(authStateProvider).value;
   if (user == null) return [];
 
@@ -32,18 +33,37 @@ final analyticsInsightsProvider =
   final summary = _buildSummary(transactions);
   final currency = accounts.isNotEmpty ? accounts.first.currency : 'INR';
 
+  const storage = FlutterSecureStorage();
+  final secureKey =
+      await storage.read(key: AppConstants.prefKeyClaudeApiKey);
   final prefs = await SharedPreferences.getInstance();
-  final rawKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ??
+  final rawKey = secureKey ??
+      prefs.getString(AppConstants.prefKeyClaudeApiKey) ??
       AppConstants.claudeApiKeyPlaceholder;
   final apiKey = rawKey.trim().isEmpty
       ? AppConstants.claudeApiKeyPlaceholder
       : rawKey.trim();
 
+  // Fast-path: return a friendly card without constructing ClaudeService.
+  // ClaudeService.generateInsightsOrThrow has the same guard, but checking
+  // here avoids an unnecessary object allocation and keeps the provider
+  // responsible for the "key not configured" user-facing message.
+  if (apiKey == AppConstants.claudeApiKeyPlaceholder || apiKey.isEmpty) {
+    return [
+      const AnalyticsInsight(
+        title: 'Add your Claude API key',
+        body: 'Go to Settings → Claude API Key and enter your key from console.anthropic.com.',
+        type: 'tip',
+      )
+    ];
+  }
+
   final claudeService = ClaudeService(apiKey);
-  return claudeService.generateInsights(
+  final results = await claudeService.generateInsightsOrThrow(
     transactionSummary: summary,
     currency: currency,
   );
+  return results;
 });
 
 List<Map<String, dynamic>> _buildSummary(List<app_model.Transaction> transactions) {

@@ -79,6 +79,7 @@ class AnalyticsScreen extends ConsumerWidget {
             ),
           ),
           insightsAsync.when(
+            skipLoadingOnReload: false,
             loading: () => SliverList(
               delegate: SliverChildBuilderDelegate(
                 (ctx, _) => const _InsightShimmer(),
@@ -97,10 +98,23 @@ class AnalyticsScreen extends ConsumerWidget {
                     Text('Failed to load insights',
                         style: theme.textTheme.titleMedium),
                     const SizedBox(height: 8),
+                    Text(
+                      e.toString().replaceFirst('Exception: ', ''),
+                      style: theme.textTheme.bodySmall,
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
                     OutlinedButton(
-                      onPressed: () =>
-                          ref.invalidate(analyticsInsightsProvider),
-                      child: const Text('Try Again'),
+                      onPressed: insightsAsync.isLoading
+                          ? null
+                          : () => ref.invalidate(analyticsInsightsProvider),
+                      child: insightsAsync.isLoading
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Try Again'),
                     ),
                   ],
                 ),

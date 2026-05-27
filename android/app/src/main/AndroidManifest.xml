@@ -29,9 +29,9 @@
             </intent-filter>
         </activity>
 
-        <!-- SMS BroadcastReceiver for auto-detecting bank transactions -->
+        <!-- another_telephony background SMS receiver for bank transaction auto-detection -->
         <receiver
-            android:name="com.matrimpathak.ledger.SmsReceiver"
+            android:name="com.shounakmulay.telephony.sms.IncomingSmsReceiver"
             android:exported="true"
             android:permission="android.permission.BROADCAST_SMS">
             <intent-filter android:priority="999">

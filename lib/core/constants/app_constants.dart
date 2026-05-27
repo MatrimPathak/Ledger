@@ -12,15 +12,16 @@ class AppConstants {
       'https://api.anthropic.com/v1/messages';
   static const String claudeApiVersion = '2023-06-01';
   static const String claudeSmsFastModel = 'claude-haiku-4-5-20251001';
-  static const String claudeAnalyticsModel = 'claude-sonnet-4-6';
+  static const String claudeAnalyticsModel = 'claude-haiku-4-5-20251001';
 
   static const String prefKeyThemeMode = 'theme_mode';
   static const String prefKeyNotifications = 'notifications_enabled';
   static const String prefKeyAutoDetect = 'auto_detect_enabled';
   static const String prefKeyClaudeApiKey = 'claude_api_key';
   static const String prefKeyOnboardingDone = 'onboarding_done';
+  static const String prefKeyUid = 'uid';
 
-  static const int smsConfidenceThreshold = 70; // 0-100
+  static const int smsConfidenceThreshold = 40; // 0-100
 
   static const List<String> supportedCurrencies = [
     'INR',

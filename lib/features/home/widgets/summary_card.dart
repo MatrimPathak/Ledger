@@ -2,17 +2,20 @@ import 'package:flutter/material.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/utils/currency_formatter.dart';
 import '../../../core/utils/date_formatter.dart';
+import '../../../models/account.dart';
 import '../../../models/transaction.dart';
 import '../../../providers/transactions_provider.dart';
 
 class SummaryCard extends StatelessWidget {
   final List<Transaction> transactions;
+  final List<Account> accounts;
   final String currency;
   final TransactionFilter filter;
 
   const SummaryCard({
     super.key,
     required this.transactions,
+    required this.accounts,
     required this.currency,
     required this.filter,
   });
@@ -30,7 +33,28 @@ class SummaryCard extends StatelessWidget {
       }
     }
 
-    final balance = totalIncome - totalExpense;
+    // Real running balance from account(s), not just this month's net
+    final double totalBalance;
+    final String balanceLabel;
+    final String balanceDisplay;
+    if (filter.accountId != null) {
+      final acct = accounts.where((a) => a.id == filter.accountId).firstOrNull;
+      totalBalance = acct?.balance ?? 0;
+      balanceLabel = acct?.title ?? 'Account Balance';
+      balanceDisplay = CurrencyFormatter.format(totalBalance, currency: currency);
+    } else {
+      final currencies = accounts.map((a) => a.currency).toSet();
+      if (currencies.length > 1) {
+        totalBalance = 0;
+        balanceLabel = 'Total Balance';
+        balanceDisplay = 'Multiple Currencies';
+      } else {
+        totalBalance = accounts.fold(0.0, (sum, a) => sum + a.balance);
+        balanceLabel = 'Total Balance';
+        balanceDisplay =
+            CurrencyFormatter.format(totalBalance, currency: currency);
+      }
+    }
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16),
@@ -67,9 +91,9 @@ class SummaryCard extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 4),
-                  const Text(
-                    'Net Balance',
-                    style: TextStyle(
+                  Text(
+                    balanceLabel,
+                    style: const TextStyle(
                       color: Colors.white70,
                       fontSize: 14,
                     ),
@@ -96,7 +120,7 @@ class SummaryCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            CurrencyFormatter.format(balance, currency: currency),
+            balanceDisplay,
             style: const TextStyle(
               color: Colors.white,
               fontSize: 32,
