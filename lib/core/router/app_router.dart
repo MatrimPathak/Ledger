@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../providers/auth_provider.dart';
@@ -18,30 +21,63 @@ import '../../widgets/main_shell.dart';
 import '../../models/account.dart';
 import '../../models/payment_mode.dart';
 import '../../models/transaction.dart';
+import '../../models/user_profile.dart';
+
+class AuthStateRefreshNotifier extends ChangeNotifier {
+  late final StreamSubscription<Object?> _subscription;
+
+  AuthStateRefreshNotifier(Stream<Object?> authStateChanges) {
+    _subscription = authStateChanges.listen((_) => notifyListeners());
+  }
+
+  @override
+  void dispose() {
+    _subscription.cancel();
+    super.dispose();
+  }
+}
+
+Future<String?> resolveAuthRedirect({
+  required String? userId,
+  required String location,
+  required FutureOr<UserProfile?> Function(String userId) loadProfile,
+}) async {
+  if (userId == null) {
+    return location == '/login' ? null : '/login';
+  }
+
+  if (location == '/login') {
+    try {
+      final profile = await loadProfile(userId);
+      if (profile == null || !profile.onboardingComplete) {
+        return '/onboarding';
+      }
+    } catch (_) {
+      return '/home';
+    }
+    return '/home';
+  }
+
+  return null;
+}
 
 final routerProvider = Provider<GoRouter>((ref) {
   final authState = ref.watch(authStateProvider);
+  final authService = ref.watch(authServiceProvider);
+  final authRefreshNotifier =
+      AuthStateRefreshNotifier(authService.authStateChanges);
+  ref.onDispose(authRefreshNotifier.dispose);
 
   return GoRouter(
     initialLocation: '/login',
+    refreshListenable: authRefreshNotifier,
     redirect: (context, state) async {
-      final isLoggedIn = authState.value != null;
-      final location = state.matchedLocation;
-
-      if (!isLoggedIn) {
-        return location == '/login' ? null : '/login';
-      }
-
-      if (isLoggedIn && location == '/login') {
-        final firestoreService = ref.read(firestoreServiceProvider);
-        final profile = await firestoreService.getProfile(authState.value!.uid);
-        if (profile == null || !profile.onboardingComplete) {
-          return '/onboarding';
-        }
-        return '/home';
-      }
-
-      return null;
+      return resolveAuthRedirect(
+        userId: authState.value?.uid,
+        location: state.matchedLocation,
+        loadProfile: (userId) =>
+            ref.read(firestoreServiceProvider).getProfile(userId),
+      );
     },
     routes: [
       GoRoute(
