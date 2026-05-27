@@ -1,9 +1,10 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import '../../core/utils/currency_formatter.dart';
 
 class NotificationService {
-  static final FlutterLocalNotificationsPlugin _plugin =
+  static FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
   static const _channelId = 'ledger_sms';
@@ -15,6 +16,16 @@ class NotificationService {
       StreamController<String>.broadcast();
 
   static Stream<String> get onNotificationTap => _tapController.stream;
+
+  @visibleForTesting
+  static void debugSetPlugin(FlutterLocalNotificationsPlugin plugin) {
+    _plugin = plugin;
+  }
+
+  @visibleForTesting
+  static void debugResetPlugin() {
+    _plugin = FlutterLocalNotificationsPlugin();
+  }
 
   static Future<void> initialize() async {
     const androidSettings =
