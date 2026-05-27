@@ -2,6 +2,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'app.dart';
 import 'core/constants/app_constants.dart';
@@ -20,14 +21,21 @@ void main() async {
 
   await NotificationService.initialize();
 
-  // Seed SharedPreferences with the .env key only if the user hasn't saved
-  // their own key yet — this preserves the user-set key across restarts.
-  // SharedPreferences is also read by the background SMS isolate.
+  // Ensure SharedPreferences always has the best available API key so the
+  // background SMS isolate (which cannot read FlutterSecureStorage) can use it.
+  // Priority: existing SharedPreferences key → secure storage key → .env key.
   final prefs = await SharedPreferences.getInstance();
   final existingKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ?? '';
   if (existingKey.isEmpty || existingKey == AppConstants.claudeApiKeyPlaceholder) {
-    final envKey = dotenv.env['CLAUDE_API_KEY'] ?? AppConstants.claudeApiKeyPlaceholder;
-    await prefs.setString(AppConstants.prefKeyClaudeApiKey, envKey);
+    const storage = FlutterSecureStorage();
+    final secureKey = await storage.read(key: AppConstants.prefKeyClaudeApiKey);
+    final isValidSecureKey = secureKey != null &&
+        secureKey.isNotEmpty &&
+        secureKey != AppConstants.claudeApiKeyPlaceholder;
+    final seedKey = isValidSecureKey
+        ? secureKey
+        : (dotenv.env['CLAUDE_API_KEY'] ?? AppConstants.claudeApiKeyPlaceholder);
+    await prefs.setString(AppConstants.prefKeyClaudeApiKey, seedKey);
   }
 
   if (prefs.getBool(AppConstants.prefKeyAutoDetect) == true) {
