@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/utils/currency_formatter.dart';
+import '../../../core/utils/payment_mode_filters.dart';
 import '../../../models/account.dart';
 import '../../../models/payment_mode.dart';
 import '../../../providers/accounts_provider.dart';
@@ -183,14 +184,10 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                   ? accounts[_currentPage].id
                   : null;
 
-              // Filter modes: show modes linked to active account, always show Cash
-              final filtered = activeAccountId != null
-                  ? modes
-                      .where((m) =>
-                          m.accountId == activeAccountId ||
-                          m.type == PaymentModeType.cash)
-                      .toList()
-                  : modes;
+              final filtered = paymentModesForAccountPage(
+                modes,
+                accountId: activeAccountId,
+              );
 
               if (filtered.isEmpty) {
                 return SliverToBoxAdapter(
