@@ -8,11 +8,15 @@ import '../../features/home/screens/home_screen.dart';
 import '../../features/accounts/screens/accounts_screen.dart';
 import '../../features/accounts/screens/add_account_screen.dart';
 import '../../features/accounts/screens/add_payment_mode_screen.dart';
+import '../../features/accounts/screens/edit_account_screen.dart';
+import '../../features/accounts/screens/edit_payment_mode_screen.dart';
 import '../../features/transactions/screens/add_transaction_screen.dart';
 import '../../features/transactions/screens/transaction_detail_screen.dart';
 import '../../features/analytics/screens/analytics_screen.dart';
 import '../../features/settings/screens/settings_screen.dart';
 import '../../widgets/main_shell.dart';
+import '../../models/account.dart';
+import '../../models/payment_mode.dart';
 import '../../models/transaction.dart';
 
 final routerProvider = Provider<GoRouter>((ref) {
@@ -28,7 +32,6 @@ final routerProvider = Provider<GoRouter>((ref) {
         return location == '/login' ? null : '/login';
       }
 
-      // Check if onboarding is complete
       if (isLoggedIn && location == '/login') {
         final firestoreService = ref.read(firestoreServiceProvider);
         final profile = await firestoreService.getProfile(authState.value!.uid);
@@ -93,8 +96,24 @@ final routerProvider = Provider<GoRouter>((ref) {
         builder: (_, __) => const AddAccountScreen(),
       ),
       GoRoute(
+        path: '/edit-account',
+        builder: (context, state) {
+          final account = state.extra;
+          if (account is! Account) return const AccountsScreen();
+          return EditAccountScreen(account: account);
+        },
+      ),
+      GoRoute(
         path: '/add-payment-mode',
         builder: (_, __) => const AddPaymentModeScreen(),
+      ),
+      GoRoute(
+        path: '/edit-payment-mode',
+        builder: (context, state) {
+          final mode = state.extra;
+          if (mode is! PaymentMode) return const AccountsScreen();
+          return EditPaymentModeScreen(mode: mode);
+        },
       ),
     ],
   );
