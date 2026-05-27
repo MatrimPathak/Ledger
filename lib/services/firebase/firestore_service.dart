@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import '../../models/account.dart';
 import '../../models/category.dart';
 import '../../models/payment_mode.dart';
@@ -157,12 +158,20 @@ class FirestoreService {
         .orderBy('date', descending: true)
         .limit(500)
         .snapshots()
-        .map((s) => s.docs
-            .where((doc) =>
-                accountId == null ||
-                (doc.data() as Map<String, dynamic>)['accountId'] == accountId)
-            .map(app_model.Transaction.fromFirestore)
-            .toList());
+        .map((s) => transactionsFromDocs(s.docs, accountId: accountId));
+  }
+
+  @visibleForTesting
+  static List<app_model.Transaction> transactionsFromDocs(
+    Iterable<DocumentSnapshot<Object?>> docs, {
+    String? accountId,
+  }) {
+    return docs
+        .where((doc) =>
+            accountId == null ||
+            (doc.data() as Map<String, dynamic>)['accountId'] == accountId)
+        .map(app_model.Transaction.fromFirestore)
+        .toList();
   }
 
   Future<app_model.Transaction> createTransaction(app_model.Transaction tx) async {
