@@ -29,8 +29,18 @@ class HomeScreen extends ConsumerWidget {
     final accounts = accountsAsync.value ?? [];
     final categories = categoriesAsync.value ?? [];
     final paymentModes = paymentModesAsync.value ?? [];
-    final currency =
-        accounts.isNotEmpty ? accounts.first.currency : 'INR';
+    final String currency;
+    if (accounts.isEmpty) {
+      currency = 'INR';
+    } else if (filter.accountId != null) {
+      currency = accounts
+              .where((a) => a.id == filter.accountId)
+              .map((a) => a.currency)
+              .firstOrNull ??
+          accounts.first.currency;
+    } else {
+      currency = accounts.first.currency;
+    }
 
     return Scaffold(
       body: txAsync.when(
@@ -50,7 +60,7 @@ class HomeScreen extends ConsumerWidget {
                     style: TextStyle(fontWeight: FontWeight.w800)),
                 centerTitle: false,
                 bottom: PreferredSize(
-                  preferredSize: const Size.fromHeight(72),
+                  preferredSize: const Size.fromHeight(88),
                   child: AccountMonthFilter(accounts: accounts),
                 ),
               ),
@@ -60,6 +70,7 @@ class HomeScreen extends ConsumerWidget {
                   padding: const EdgeInsets.only(top: 16, bottom: 12),
                   child: SummaryCard(
                     transactions: transactions,
+                    accounts: accounts,
                     currency: currency,
                     filter: filter,
                   ),
