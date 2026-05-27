@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
@@ -21,10 +22,18 @@ void main() async {
 
   await NotificationService.initialize();
 
+  final prefs = await SharedPreferences.getInstance();
+
+  // Persist uid so the background SMS isolate can use it without relying
+  // on FirebaseAuth.instance.currentUser (which is null in a fresh isolate).
+  final uid = FirebaseAuth.instance.currentUser?.uid;
+  if (uid != null) {
+    await prefs.setString(AppConstants.prefKeyUid, uid);
+  }
+
   // Ensure SharedPreferences always has the best available API key so the
   // background SMS isolate (which cannot read FlutterSecureStorage) can use it.
   // Priority: existing SharedPreferences key → secure storage key → .env key.
-  final prefs = await SharedPreferences.getInstance();
   final existingKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ?? '';
   if (existingKey.isEmpty || existingKey == AppConstants.claudeApiKeyPlaceholder) {
     const storage = FlutterSecureStorage();

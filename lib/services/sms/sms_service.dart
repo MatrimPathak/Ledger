@@ -26,26 +26,47 @@ class BankSmsFilter {
 // Top-level background SMS handler — runs in a separate isolate
 @pragma('vm:entry-point')
 Future<void> backgroundSmsHandler(SmsMessage message) async {
+  final body = message.body ?? '';
+  if (!BankSmsFilter.looksLikeBankSms(body)) return;
+
+  final prefs = await SharedPreferences.getInstance();
+  if (prefs.getBool(AppConstants.prefKeyAutoDetect) != true) return;
+
   try {
-    final body = message.body ?? '';
-    if (!BankSmsFilter.looksLikeBankSms(body)) return;
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  } catch (_) {
+    // Already initialized in the main isolate — safe to continue
+  }
 
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool(AppConstants.prefKeyAutoDetect) != true) return;
+  await NotificationService.initialize();
 
-    await Firebase.initializeApp(
-        options: DefaultFirebaseOptions.currentPlatform);
-    await NotificationService.initialize();
+  // Show a "processing" notification immediately so we know the handler fired.
+  // This is replaced by the final transaction notification on success.
+  await NotificationService.showProcessingNotification(body);
 
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+  try {
+    // FirebaseAuth.instance.currentUser is null in a fresh background isolate
+    // because auth state is restored asynchronously. Fall back to the uid we
+    // persisted in SharedPreferences on the last foreground app start.
+    String? uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null || uid.isEmpty) {
+      uid = prefs.getString(AppConstants.prefKeyUid);
+    }
+    if (uid == null || uid.isEmpty) {
+      await NotificationService.showSmsErrorNotification('Not signed in — open Ledger once to re-authenticate.');
+      return;
+    }
 
     final firestoreService = FirestoreService();
-    final accounts = await firestoreService.fetchAccounts(user.uid);
-    final paymentModes = await firestoreService.fetchPaymentModes(user.uid);
+    final accounts = await firestoreService.fetchAccounts(uid);
+    final paymentModes = await firestoreService.fetchPaymentModes(uid);
 
     final apiKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ??
         AppConstants.claudeApiKeyPlaceholder;
+    if (apiKey == AppConstants.claudeApiKeyPlaceholder || apiKey.isEmpty) {
+      await NotificationService.showSmsErrorNotification('Add your Claude API key in Settings to auto-detect transactions.');
+      return;
+    }
 
     final claudeService = ClaudeService(apiKey);
     final parsed = await claudeService.parseSmsTransaction(
@@ -54,11 +75,17 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       paymentModes: paymentModes,
     );
 
-    if (parsed == null) return;
+    if (parsed == null) {
+      await NotificationService.showSmsErrorNotification('Could not parse transaction from SMS (low confidence).');
+      return;
+    }
 
-    // Find best matching category
-    final categories = await firestoreService.watchCategories(user.uid).first;
-    if (categories.isEmpty) return;
+    final categories = await firestoreService.watchCategories(uid).first;
+    if (categories.isEmpty) {
+      await NotificationService.showSmsErrorNotification('No categories found — open Ledger to set up categories.');
+      return;
+    }
+
     final slug = parsed.suggestedCategorySlug ?? 'other';
     final category = categories.firstWhere(
       (c) => c.title.toLowerCase().contains(slug),
@@ -75,7 +102,7 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
 
     final transaction = tx_model.Transaction(
       id: '',
-      userId: user.uid,
+      userId: uid,
       title: parsed.title,
       amount: parsed.amount,
       type: txType,
@@ -90,25 +117,22 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
 
     await firestoreService.createTransaction(transaction);
 
-    // Update account balance
     if (resolvedAccountId != null) {
-      final accountId = resolvedAccountId;
       final delta = txType == tx_model.TransactionType.income
           ? parsed.amount
           : -parsed.amount;
-      await firestoreService.updateAccountBalance(user.uid, accountId, delta);
+      await firestoreService.updateAccountBalance(uid, resolvedAccountId, delta);
     }
 
     final currency = accounts.isNotEmpty ? accounts.first.currency : 'INR';
     await NotificationService.showTransactionDetectedNotification(
       id: now.millisecondsSinceEpoch ~/ 1000,
-      title: NotificationService.buildNotificationTitle(
-          parsed.title, parsed.amount, currency),
+      title: NotificationService.buildNotificationTitle(parsed.title, parsed.amount, currency),
       body: 'Auto-detected · Tap to review in Ledger',
       transactionId: transaction.id,
     );
-  } catch (_) {
-    // Fail silently in background isolate
+  } catch (e) {
+    await NotificationService.showSmsErrorNotification('SMS auto-detect error: $e');
   }
 }
 

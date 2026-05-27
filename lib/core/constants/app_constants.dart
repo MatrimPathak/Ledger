@@ -19,8 +19,9 @@ class AppConstants {
   static const String prefKeyAutoDetect = 'auto_detect_enabled';
   static const String prefKeyClaudeApiKey = 'claude_api_key';
   static const String prefKeyOnboardingDone = 'onboarding_done';
+  static const String prefKeyUid = 'uid';
 
-  static const int smsConfidenceThreshold = 70; // 0-100
+  static const int smsConfidenceThreshold = 40; // 0-100
 
   static const List<String> supportedCurrencies = [
     'INR',
