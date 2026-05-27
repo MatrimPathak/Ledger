@@ -60,7 +60,7 @@ class HomeScreen extends ConsumerWidget {
                     style: TextStyle(fontWeight: FontWeight.w800)),
                 centerTitle: false,
                 bottom: PreferredSize(
-                  preferredSize: const Size.fromHeight(72),
+                  preferredSize: const Size.fromHeight(88),
                   child: AccountMonthFilter(accounts: accounts),
                 ),
               ),
