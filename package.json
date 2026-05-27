@@ -1,0 +1,25 @@
+{
+  "name": "ledger",
+  "version": "1.0.0",
+  "description": "Personal finance tracker test tooling.",
+  "private": true,
+  "scripts": {
+    "test": "npm run test:firestore-rules",
+    "test:firestore-rules": "firebase emulators:exec --only firestore --project demo-ledger-rules \"node --test test/firestore.rules.test.mjs\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MatrimPathak/Ledger.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/MatrimPathak/Ledger/issues"
+  },
+  "homepage": "https://github.com/MatrimPathak/Ledger#readme",
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.1",
+    "firebase-tools": "^15.18.0"
+  }
+}
