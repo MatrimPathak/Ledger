@@ -102,7 +102,7 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       createdAt: now,
     );
 
-    await firestoreService.createTransaction(transaction);
+    final saved = await firestoreService.createTransaction(transaction);
 
     if (resolvedAccountId != null) {
       final delta = txType == tx_model.TransactionType.income
@@ -116,7 +116,7 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       id: now.millisecondsSinceEpoch ~/ 1000,
       title: NotificationService.buildNotificationTitle(parsed.title, parsed.amount, currency),
       body: 'Auto-detected · Tap to review in Ledger',
-      transactionId: transaction.id,
+      transactionId: saved.id,
     );
   } catch (e) {
     await NotificationService.showSmsErrorNotification('SMS auto-detect error: $e');
