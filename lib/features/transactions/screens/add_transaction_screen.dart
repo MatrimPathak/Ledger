@@ -194,7 +194,13 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
     final accounts = accountsAsync.value ?? [];
     final allModes = paymentModesAsync.value ?? [];
     final filteredModes = _accountId != null
-        ? allModes.where((m) => m.accountId == _accountId).toList()
+        ? allModes
+            .where((m) =>
+                m.accountId == _accountId ||
+                m.type == PaymentModeType.cash ||
+                (m.type == PaymentModeType.atm &&
+                    (m.accountId == null || m.accountId == _accountId)))
+            .toList()
         : allModes;
 
     final Category? selectedCategory = _categoryId != null

@@ -48,6 +48,36 @@ class NotificationService {
     }
   }
 
+  static Future<void> showProcessingNotification(String smsPreview) async {
+    const androidDetails = AndroidNotificationDetails(
+      _channelId,
+      _channelName,
+      channelDescription: 'Auto-detected transaction notification',
+      importance: Importance.low,
+      priority: Priority.low,
+      ongoing: false,
+    );
+    const details = NotificationDetails(android: androidDetails);
+    await _plugin.show(
+      0,
+      'Ledger — Processing bank SMS…',
+      smsPreview.length > 80 ? '${smsPreview.substring(0, 80)}…' : smsPreview,
+      details,
+    );
+  }
+
+  static Future<void> showSmsErrorNotification(String reason) async {
+    const androidDetails = AndroidNotificationDetails(
+      _channelId,
+      _channelName,
+      channelDescription: 'Auto-detected transaction notification',
+      importance: Importance.defaultImportance,
+      priority: Priority.defaultPriority,
+    );
+    const details = NotificationDetails(android: androidDetails);
+    await _plugin.show(0, 'Ledger — Auto-detect failed', reason, details);
+  }
+
   static Future<void> showTransactionDetectedNotification({
     required int id,
     required String title,
@@ -61,7 +91,6 @@ class NotificationService {
       importance: Importance.high,
       priority: Priority.high,
       ticker: 'Transaction detected',
-      styleInformation: BigTextStyleInformation(''),
     );
     const details = NotificationDetails(android: androidDetails);
     await _plugin.show(id, title, body, details, payload: transactionId);
