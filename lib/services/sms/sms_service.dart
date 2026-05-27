@@ -8,19 +8,22 @@ import '../ai/claude_service.dart';
 import '../notification/notification_service.dart';
 import '../../core/constants/app_constants.dart';
 import '../../models/transaction.dart' as tx_model;
+import 'bank_sms_filter.dart';
 
-class BankSmsFilter {
-  static const _keywords = [
-    'debited', 'credited', 'debit', 'credit',
-    'inr', 'upi ref', 'neft', 'imps', 'rtgs',
-    'a/c', 'acct', 'transaction', 'rs.', 'rs ',
-    'balance', 'bank',
-  ];
-
-  static bool looksLikeBankSms(String body) {
-    final lower = body.toLowerCase();
-    return _keywords.any((k) => lower.contains(k));
+String? resolveBackgroundSmsUid({
+  required String? firebaseAuthUid,
+  required SharedPreferences prefs,
+}) {
+  if (firebaseAuthUid != null && firebaseAuthUid.isNotEmpty) {
+    return firebaseAuthUid;
   }
+
+  final storedUid = prefs.getString(AppConstants.prefKeyUid);
+  if (storedUid != null && storedUid.isNotEmpty) {
+    return storedUid;
+  }
+
+  return null;
 }
 
 // Top-level background SMS handler — runs in a separate isolate
@@ -48,10 +51,10 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     // FirebaseAuth.instance.currentUser is null in a fresh background isolate
     // because auth state is restored asynchronously. Fall back to the uid we
     // persisted in SharedPreferences on the last foreground app start.
-    String? uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null || uid.isEmpty) {
-      uid = prefs.getString(AppConstants.prefKeyUid);
-    }
+    final uid = resolveBackgroundSmsUid(
+      firebaseAuthUid: FirebaseAuth.instance.currentUser?.uid,
+      prefs: prefs,
+    );
     if (uid == null || uid.isEmpty) {
       await NotificationService.showSmsErrorNotification('Not signed in — open Ledger once to re-authenticate.');
       return;
