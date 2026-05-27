@@ -9,7 +9,7 @@ import 'accounts_provider.dart';
 import '../models/transaction.dart' as app_model;
 
 final analyticsInsightsProvider =
-    FutureProvider.autoDispose<List<AnalyticsInsight>>((ref) async {
+    FutureProvider<List<AnalyticsInsight>>((ref) async {
   final user = ref.watch(authStateProvider).value;
   if (user == null) return [];
 
