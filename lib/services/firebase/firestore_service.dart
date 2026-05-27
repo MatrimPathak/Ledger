@@ -104,6 +104,10 @@ class FirestoreService {
     return mode;
   }
 
+  Future<void> updatePaymentMode(PaymentMode mode) async {
+    await _paymentModes(mode.userId).doc(mode.id).update(mode.toFirestore());
+  }
+
   Future<void> deletePaymentMode(String uid, String modeId) async {
     await _paymentModes(uid).doc(modeId).delete();
   }
@@ -159,8 +163,8 @@ class FirestoreService {
   }
 
   Future<app_model.Transaction> createTransaction(app_model.Transaction tx) async {
-    await _transactions(tx.userId).add(tx.toFirestore());
-    return tx;
+    final docRef = await _transactions(tx.userId).add(tx.toFirestore());
+    return tx.copyWith(id: docRef.id);
   }
 
   Future<void> updateTransaction(app_model.Transaction tx) async {
