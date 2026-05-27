@@ -91,7 +91,6 @@ class NotificationService {
       importance: Importance.high,
       priority: Priority.high,
       ticker: 'Transaction detected',
-      styleInformation: BigTextStyleInformation(''),
     );
     const details = NotificationDetails(android: androidDetails);
     await _plugin.show(id, title, body, details, payload: transactionId);

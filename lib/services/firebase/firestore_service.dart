@@ -163,8 +163,8 @@ class FirestoreService {
   }
 
   Future<app_model.Transaction> createTransaction(app_model.Transaction tx) async {
-    await _transactions(tx.userId).add(tx.toFirestore());
-    return tx;
+    final docRef = await _transactions(tx.userId).add(tx.toFirestore());
+    return tx.copyWith(id: docRef.id);
   }
 
   Future<void> updateTransaction(app_model.Transaction tx) async {
