@@ -74,6 +74,7 @@ class Transaction {
       };
 
   Transaction copyWith({
+    String? id,
     String? title,
     double? amount,
     TransactionType? type,
@@ -86,7 +87,7 @@ class Transaction {
     bool clearNotes = false,
   }) =>
       Transaction(
-        id: id,
+        id: id ?? this.id,
         userId: userId,
         title: title ?? this.title,
         amount: amount ?? this.amount,

@@ -6,24 +6,37 @@ import '../../../core/theme/app_colors.dart';
 import '../../../models/account.dart';
 import '../../../models/payment_mode.dart';
 import '../../../providers/accounts_provider.dart';
-import '../../../providers/auth_provider.dart';
 import '../../../providers/firestore_provider.dart';
 
-class AddPaymentModeScreen extends ConsumerStatefulWidget {
-  const AddPaymentModeScreen({super.key});
+class EditPaymentModeScreen extends ConsumerStatefulWidget {
+  final PaymentMode mode;
+
+  const EditPaymentModeScreen({super.key, required this.mode});
 
   @override
-  ConsumerState<AddPaymentModeScreen> createState() =>
-      _AddPaymentModeScreenState();
+  ConsumerState<EditPaymentModeScreen> createState() =>
+      _EditPaymentModeScreenState();
 }
 
-class _AddPaymentModeScreenState extends ConsumerState<AddPaymentModeScreen> {
-  PaymentModeType _type = PaymentModeType.upi;
-  String? _accountId;
-  final _lastFourCtrl = TextEditingController();
-  final _upiPrefixCtrl = TextEditingController();
-  final _bankHandleCtrl = TextEditingController();
+class _EditPaymentModeScreenState
+    extends ConsumerState<EditPaymentModeScreen> {
+  late PaymentModeType _type;
+  late String? _accountId;
+  late final TextEditingController _lastFourCtrl;
+  late final TextEditingController _upiPrefixCtrl;
+  late final TextEditingController _bankHandleCtrl;
   bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    final m = widget.mode;
+    _type = m.type;
+    _accountId = m.accountId;
+    _lastFourCtrl = TextEditingController(text: m.lastFourDigits ?? '');
+    _upiPrefixCtrl = TextEditingController(text: m.upiId ?? '');
+    _bankHandleCtrl = TextEditingController(text: m.bankHandle ?? '');
+  }
 
   @override
   void dispose() {
@@ -34,8 +47,6 @@ class _AddPaymentModeScreenState extends ConsumerState<AddPaymentModeScreen> {
   }
 
   Future<void> _save() async {
-    final user = ref.read(authStateProvider).value;
-    if (user == null) return;
     setState(() => _saving = true);
     try {
       String title;
@@ -63,20 +74,21 @@ class _AddPaymentModeScreenState extends ConsumerState<AddPaymentModeScreen> {
           title = _type.label;
       }
 
-      final mode = PaymentMode(
-        id: '',
-        userId: user.uid,
+      final updated = widget.mode.copyWith(
         type: _type,
-        accountId: (_type == PaymentModeType.cash || _type == PaymentModeType.atm)
+        accountId: () => (_type == PaymentModeType.cash ||
+                _type == PaymentModeType.atm)
             ? null
             : _accountId,
         title: title,
-        lastFourDigits: _lastFourCtrl.text.isNotEmpty ? _lastFourCtrl.text : null,
-        upiId: _upiPrefixCtrl.text.isNotEmpty ? _upiPrefixCtrl.text : null,
-        bankHandle: _bankHandleCtrl.text.isNotEmpty ? _bankHandleCtrl.text : null,
-        createdAt: DateTime.now(),
+        lastFourDigits: () =>
+            _lastFourCtrl.text.isNotEmpty ? _lastFourCtrl.text : null,
+        upiId: () =>
+            _upiPrefixCtrl.text.isNotEmpty ? _upiPrefixCtrl.text : null,
+        bankHandle: () =>
+            _bankHandleCtrl.text.isNotEmpty ? _bankHandleCtrl.text : null,
       );
-      await ref.read(firestoreServiceProvider).createPaymentMode(mode);
+      await ref.read(firestoreServiceProvider).updatePaymentMode(updated);
       if (mounted) context.pop();
     } catch (e) {
       if (mounted) {
@@ -91,8 +103,7 @@ class _AddPaymentModeScreenState extends ConsumerState<AddPaymentModeScreen> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final accountsAsync = ref.watch(accountsProvider);
-    final accounts = accountsAsync.value ?? [];
+    final accounts = ref.watch(accountsProvider).value ?? [];
 
     Account? selectedAccount;
     try {
@@ -108,7 +119,7 @@ class _AddPaymentModeScreenState extends ConsumerState<AddPaymentModeScreen> {
         _type != PaymentModeType.cash && _type != PaymentModeType.atm;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Add Payment Mode')),
+      appBar: AppBar(title: const Text('Edit Payment Mode')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -178,7 +189,8 @@ class _AddPaymentModeScreenState extends ConsumerState<AddPaymentModeScreen> {
                 FilteringTextInputFormatter.digitsOnly,
                 LengthLimitingTextInputFormatter(4),
               ],
-              decoration: const InputDecoration(labelText: 'Last 4 digits of card'),
+              decoration:
+                  const InputDecoration(labelText: 'Last 4 digits of card'),
               maxLength: 4,
             ),
           if (showAccountField) ...[
@@ -186,7 +198,7 @@ class _AddPaymentModeScreenState extends ConsumerState<AddPaymentModeScreen> {
             Text('Associated Account', style: theme.textTheme.labelLarge),
             const SizedBox(height: 8),
             if (accounts.isEmpty)
-              Text('No accounts available — add an account first.',
+              Text('No accounts available.',
                   style: theme.textTheme.bodySmall)
             else
               DropdownButtonFormField<String?>(
@@ -212,7 +224,7 @@ class _AddPaymentModeScreenState extends ConsumerState<AddPaymentModeScreen> {
                       height: 20,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white))
-                  : const Text('Add Payment Mode'),
+                  : const Text('Save Changes'),
             ),
           ),
         ],
