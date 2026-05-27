@@ -7,7 +7,10 @@ import '../../models/user_profile.dart';
 import '../../core/constants/default_categories.dart';
 
 class FirestoreService {
-  final FirebaseFirestore _db = FirebaseFirestore.instance;
+  FirestoreService({FirebaseFirestore? firestore})
+      : _db = firestore ?? FirebaseFirestore.instance;
+
+  final FirebaseFirestore _db;
 
   // Collection refs
   DocumentReference _userDoc(String uid) => _db.collection('users').doc(uid);
