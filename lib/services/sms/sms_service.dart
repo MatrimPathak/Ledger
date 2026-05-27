@@ -23,6 +23,22 @@ class BankSmsFilter {
   }
 }
 
+String? resolveBackgroundSmsUid({
+  required String? firebaseAuthUid,
+  required SharedPreferences prefs,
+}) {
+  if (firebaseAuthUid != null && firebaseAuthUid.isNotEmpty) {
+    return firebaseAuthUid;
+  }
+
+  final storedUid = prefs.getString(AppConstants.prefKeyUid);
+  if (storedUid != null && storedUid.isNotEmpty) {
+    return storedUid;
+  }
+
+  return null;
+}
+
 // Top-level background SMS handler — runs in a separate isolate
 @pragma('vm:entry-point')
 Future<void> backgroundSmsHandler(SmsMessage message) async {
@@ -48,10 +64,10 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     // FirebaseAuth.instance.currentUser is null in a fresh background isolate
     // because auth state is restored asynchronously. Fall back to the uid we
     // persisted in SharedPreferences on the last foreground app start.
-    String? uid = FirebaseAuth.instance.currentUser?.uid;
-    if (uid == null || uid.isEmpty) {
-      uid = prefs.getString(AppConstants.prefKeyUid);
-    }
+    final uid = resolveBackgroundSmsUid(
+      firebaseAuthUid: FirebaseAuth.instance.currentUser?.uid,
+      prefs: prefs,
+    );
     if (uid == null || uid.isEmpty) {
       await NotificationService.showSmsErrorNotification('Not signed in — open Ledger once to re-authenticate.');
       return;

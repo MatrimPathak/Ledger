@@ -56,8 +56,25 @@ class AnalyticsInsight {
 
 class ClaudeService {
   final String apiKey;
+  final http.Client? _client;
 
-  ClaudeService(this.apiKey);
+  ClaudeService(this.apiKey, {http.Client? client}) : _client = client;
+
+  Future<http.Response> _postToClaude(Map<String, dynamic> body) {
+    final client = _client;
+    final uri = Uri.parse(AppConstants.claudeApiUrl);
+    final headers = {
+      'x-api-key': apiKey,
+      'anthropic-version': AppConstants.claudeApiVersion,
+      'content-type': 'application/json',
+    };
+
+    if (client != null) {
+      return client.post(uri, headers: headers, body: jsonEncode(body));
+    }
+
+    return http.post(uri, headers: headers, body: jsonEncode(body));
+  }
 
   Future<ParsedSmsTransaction?> parseSmsTransaction({
     required String smsBody,
@@ -95,23 +112,14 @@ Return JSON:
 }''';
 
     try {
-      final response = await http
-          .post(
-            Uri.parse(AppConstants.claudeApiUrl),
-            headers: {
-              'x-api-key': apiKey,
-              'anthropic-version': AppConstants.claudeApiVersion,
-              'content-type': 'application/json',
-            },
-            body: jsonEncode({
-              'model': AppConstants.claudeSmsFastModel,
-              'max_tokens': 256,
-              'system': 'You are a financial SMS parser. Return ONLY valid JSON.',
-              'messages': [
-                {'role': 'user', 'content': prompt}
-              ],
-            }),
-          )
+      final response = await _postToClaude({
+        'model': AppConstants.claudeSmsFastModel,
+        'max_tokens': 256,
+        'system': 'You are a financial SMS parser. Return ONLY valid JSON.',
+        'messages': [
+          {'role': 'user', 'content': prompt}
+        ],
+      })
           .timeout(const Duration(seconds: 30));
 
       if (response.statusCode != 200) return null;
@@ -195,24 +203,15 @@ Return ONLY a JSON array (no markdown):
 ]
 Return 4-6 most valuable insights.''';
 
-    final response = await http
-        .post(
-          Uri.parse(AppConstants.claudeApiUrl),
-          headers: {
-            'x-api-key': apiKey,
-            'anthropic-version': AppConstants.claudeApiVersion,
-            'content-type': 'application/json',
-          },
-          body: jsonEncode({
-            'model': AppConstants.claudeAnalyticsModel,
-            'max_tokens': 1024,
-            'system':
-                'You are a personal finance advisor. Return ONLY a valid JSON array of insights.',
-            'messages': [
-              {'role': 'user', 'content': prompt}
-            ],
-          }),
-        )
+    final response = await _postToClaude({
+      'model': AppConstants.claudeAnalyticsModel,
+      'max_tokens': 1024,
+      'system':
+          'You are a personal finance advisor. Return ONLY a valid JSON array of insights.',
+      'messages': [
+        {'role': 'user', 'content': prompt}
+      ],
+    })
         .timeout(const Duration(seconds: 30));
 
     if (response.statusCode == 401) {
