@@ -8,20 +8,7 @@ import '../ai/claude_service.dart';
 import '../notification/notification_service.dart';
 import '../../core/constants/app_constants.dart';
 import '../../models/transaction.dart' as tx_model;
-
-class BankSmsFilter {
-  static const _keywords = [
-    'debited', 'credited', 'debit', 'credit',
-    'inr', 'upi ref', 'neft', 'imps', 'rtgs',
-    'a/c', 'acct', 'transaction', 'rs.', 'rs ',
-    'balance', 'bank',
-  ];
-
-  static bool looksLikeBankSms(String body) {
-    final lower = body.toLowerCase();
-    return _keywords.any((k) => lower.contains(k));
-  }
-}
+import 'bank_sms_filter.dart';
 
 // Top-level background SMS handler — runs in a separate isolate
 @pragma('vm:entry-point')
