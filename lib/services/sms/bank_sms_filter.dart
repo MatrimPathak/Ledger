@@ -16,6 +16,14 @@ class BankSmsFilter {
     'rs ',
     'balance',
     'bank',
+    'e-mandate',
+    'emandate',
+    'mandate',
+    'nach',
+    'umn',
+    'will be deducted',
+    'auto debit',
+    'auto-debit',
   ];
 
   static bool looksLikeBankSms(String body) {
