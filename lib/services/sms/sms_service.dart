@@ -8,6 +8,7 @@ import '../firebase/firestore_service.dart';
 import '../ai/claude_service.dart';
 import '../notification/notification_service.dart';
 import '../../core/constants/app_constants.dart';
+import '../../models/category.dart';
 import '../../models/transaction.dart' as tx_model;
 import '../../models/payment_mode.dart';
 import 'bank_sms_filter.dart';

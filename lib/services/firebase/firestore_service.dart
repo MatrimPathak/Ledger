@@ -1,5 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/foundation.dart';
+import 'package:flutter/foundation.dart' hide Category;
 import '../../models/account.dart';
 import '../../models/category.dart';
 import '../../models/payment_mode.dart';
