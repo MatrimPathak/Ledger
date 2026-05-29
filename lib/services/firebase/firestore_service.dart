@@ -130,8 +130,16 @@ class FirestoreService {
   }
 
   Future<Category> createCategory(Category category) async {
-    await _categories(category.userId).add(category.toFirestore());
-    return category;
+    final docRef = await _categories(category.userId).add(category.toFirestore());
+    return Category(
+      id: docRef.id,
+      userId: category.userId,
+      title: category.title,
+      iconCodePoint: category.iconCodePoint,
+      colorValue: category.colorValue,
+      isDefault: category.isDefault,
+      createdAt: category.createdAt,
+    );
   }
 
   Future<void> deleteCategory(String uid, String categoryId) async {

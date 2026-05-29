@@ -8,6 +8,7 @@ import '../firebase/firestore_service.dart';
 import '../ai/claude_service.dart';
 import '../notification/notification_service.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/constants/default_categories.dart';
 import '../../models/category.dart';
 import '../../models/transaction.dart' as tx_model;
 import '../../models/payment_mode.dart';
@@ -65,6 +66,35 @@ Future<void> _markProcessed(String fingerprint, SharedPreferences prefs) async {
     if (ids.length > 300) ids.removeRange(0, ids.length - 300);
     await prefs.setString(AppConstants.prefKeyProcessedSmsIds, jsonEncode(ids));
   }
+}
+
+// Looks up a category by slug. If none matches, creates one from the default
+// category definitions so the user never sees an "Other" fallback silently.
+Future<Category> _resolveOrCreateCategory({
+  required String slug,
+  required List<Category> categories,
+  required String uid,
+  required FirestoreService firestoreService,
+}) async {
+  final lower = slug.toLowerCase();
+  final existing =
+      categories.where((c) => c.title.toLowerCase().contains(lower)).firstOrNull;
+  if (existing != null) return existing;
+
+  final defaultEntry = DefaultCategories.list.firstWhere(
+    (e) => (e['title'] as String).toLowerCase().contains(lower),
+    orElse: () => DefaultCategories.list.last,
+  );
+
+  return firestoreService.createCategory(Category(
+    id: '',
+    userId: uid,
+    title: defaultEntry['title'] as String,
+    iconCodePoint: (defaultEntry['icon'] as dynamic).codePoint as int,
+    colorValue: (defaultEntry['color'] as dynamic).value as int,
+    isDefault: false,
+    createdAt: DateTime.now(),
+  ));
 }
 
 // Top-level background SMS handler — runs in a separate isolate
@@ -134,15 +164,12 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     }
 
     final categories = await firestoreService.watchCategories(uid).first;
-    if (categories.isEmpty) {
-      await NotificationService.showSmsErrorNotification('No categories found — open Ledger to set up categories.');
-      return;
-    }
-
     final slug = parsed.suggestedCategorySlug ?? 'other';
-    final category = categories.firstWhere(
-      (c) => c.title.toLowerCase().contains(slug),
-      orElse: () => categories.last,
+    final category = await _resolveOrCreateCategory(
+      slug: slug,
+      categories: categories,
+      uid: uid,
+      firestoreService: firestoreService,
     );
 
     final txType = parsed.type == 'income'
@@ -264,8 +291,9 @@ class SmsService {
     final firestoreService = FirestoreService();
     final accounts = await firestoreService.fetchAccounts(uid);
     final paymentModes = await firestoreService.fetchPaymentModes(uid);
-    final categories = await firestoreService.watchCategories(uid).first;
-    if (categories.isEmpty) return;
+    // Use a mutable list so newly auto-created categories are visible to
+    // subsequent messages in the same batch (avoids duplicate creation).
+    var categories = await firestoreService.watchCategories(uid).first;
 
     await NotificationService.initialize();
     NotificationService.notificationsEnabled =
@@ -293,10 +321,17 @@ class SmsService {
         if (parsed == null) continue;
 
         final slug = parsed.suggestedCategorySlug ?? 'other';
-        final category = categories.firstWhere(
-          (c) => c.title.toLowerCase().contains(slug),
-          orElse: () => categories.last,
+        final category = await _resolveOrCreateCategory(
+          slug: slug,
+          categories: categories,
+          uid: uid,
+          firestoreService: firestoreService,
         );
+        // Keep the local list up-to-date so the next SMS in this batch
+        // reuses the just-created category instead of creating it again.
+        if (!categories.any((c) => c.id == category.id)) {
+          categories = [...categories, category];
+        }
 
         final txType = parsed.type == 'income'
             ? tx_model.TransactionType.income
