@@ -6,8 +6,12 @@ class NotificationService {
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
 
-  static const _channelId = 'ledger_sms';
-  static const _channelName = 'Auto-detected Transactions';
+  static const _smsChannelId = 'ledger_sms';
+  static const _smsChannelName = 'Auto-detected Transactions';
+  static const _txChannelId = 'ledger_transactions';
+  static const _txChannelName = 'Transaction Updates';
+
+  static bool notificationsEnabled = true;
 
   /// Stream that emits a transactionId whenever a notification is tapped.
   /// Listeners (e.g. in app.dart) can subscribe to navigate accordingly.
@@ -24,21 +28,34 @@ class NotificationService {
       settings,
       onDidReceiveNotificationResponse: _onNotificationTap,
     );
-    await _createChannel();
+    final androidPlugin = _plugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>();
+    // Request POST_NOTIFICATIONS permission (required on Android 13+).
+    await androidPlugin?.requestNotificationsPermission();
+    await _createChannels(androidPlugin);
   }
 
-  static Future<void> _createChannel() async {
-    const channel = AndroidNotificationChannel(
-      _channelId,
-      _channelName,
-      description: 'Notifications for automatically detected transactions',
-      importance: Importance.high,
-      playSound: true,
+  static Future<void> _createChannels(
+      AndroidFlutterLocalNotificationsPlugin? androidPlugin) async {
+    await androidPlugin?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _smsChannelId,
+        _smsChannelName,
+        description: 'Notifications for automatically detected transactions',
+        importance: Importance.high,
+        playSound: true,
+      ),
     );
-    await _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>()
-        ?.createNotificationChannel(channel);
+    await androidPlugin?.createNotificationChannel(
+      const AndroidNotificationChannel(
+        _txChannelId,
+        _txChannelName,
+        description: 'Notifications for manually added or edited transactions',
+        importance: Importance.defaultImportance,
+        playSound: true,
+      ),
+    );
   }
 
   static void _onNotificationTap(NotificationResponse response) {
@@ -48,10 +65,13 @@ class NotificationService {
     }
   }
 
+  // ── SMS auto-detect notifications ─────────────────────────────────────────
+
   static Future<void> showProcessingNotification(String smsPreview) async {
+    if (!notificationsEnabled) return;
     const androidDetails = AndroidNotificationDetails(
-      _channelId,
-      _channelName,
+      _smsChannelId,
+      _smsChannelName,
       channelDescription: 'Auto-detected transaction notification',
       importance: Importance.low,
       priority: Priority.low,
@@ -67,9 +87,10 @@ class NotificationService {
   }
 
   static Future<void> showSmsErrorNotification(String reason) async {
+    if (!notificationsEnabled) return;
     const androidDetails = AndroidNotificationDetails(
-      _channelId,
-      _channelName,
+      _smsChannelId,
+      _smsChannelName,
       channelDescription: 'Auto-detected transaction notification',
       importance: Importance.defaultImportance,
       priority: Priority.defaultPriority,
@@ -84,9 +105,10 @@ class NotificationService {
     required String body,
     required String transactionId,
   }) async {
+    if (!notificationsEnabled) return;
     const androidDetails = AndroidNotificationDetails(
-      _channelId,
-      _channelName,
+      _smsChannelId,
+      _smsChannelName,
       channelDescription: 'Auto-detected transaction notification',
       importance: Importance.high,
       priority: Priority.high,
@@ -95,6 +117,64 @@ class NotificationService {
     const details = NotificationDetails(android: androidDetails);
     await _plugin.show(id, title, body, details, payload: transactionId);
   }
+
+  // ── Manual transaction notifications ──────────────────────────────────────
+
+  static Future<void> showTransactionSavedNotification(
+      String title, double amount, String currency, bool isIncome) async {
+    final formatted = CurrencyFormatter.format(amount, currency: currency);
+    final typeLabel = isIncome ? 'income' : 'expense';
+    const androidDetails = AndroidNotificationDetails(
+      _txChannelId,
+      _txChannelName,
+      channelDescription: 'Transaction update notification',
+      importance: Importance.defaultImportance,
+      priority: Priority.defaultPriority,
+    );
+    await _plugin.show(
+      1,
+      'Transaction saved',
+      '$formatted $typeLabel · $title',
+      const NotificationDetails(android: androidDetails),
+    );
+  }
+
+  static Future<void> showTransactionUpdatedNotification(
+      String title, double amount, String currency, bool isIncome) async {
+    final formatted = CurrencyFormatter.format(amount, currency: currency);
+    final typeLabel = isIncome ? 'income' : 'expense';
+    const androidDetails = AndroidNotificationDetails(
+      _txChannelId,
+      _txChannelName,
+      channelDescription: 'Transaction update notification',
+      importance: Importance.defaultImportance,
+      priority: Priority.defaultPriority,
+    );
+    await _plugin.show(
+      1,
+      'Transaction updated',
+      '$formatted $typeLabel · $title',
+      const NotificationDetails(android: androidDetails),
+    );
+  }
+
+  static Future<void> showTransactionDeletedNotification(String title) async {
+    const androidDetails = AndroidNotificationDetails(
+      _txChannelId,
+      _txChannelName,
+      channelDescription: 'Transaction update notification',
+      importance: Importance.defaultImportance,
+      priority: Priority.defaultPriority,
+    );
+    await _plugin.show(
+      1,
+      'Transaction deleted',
+      title,
+      const NotificationDetails(android: androidDetails),
+    );
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
 
   static String buildNotificationTitle(
       String merchantName, double amount, String currency) {

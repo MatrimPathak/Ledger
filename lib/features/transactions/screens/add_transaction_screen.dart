@@ -14,6 +14,8 @@ import '../../../providers/auth_provider.dart';
 import '../../../providers/categories_provider.dart';
 import '../../../providers/firestore_provider.dart';
 import '../../../providers/payment_modes_provider.dart';
+import '../../../providers/settings_provider.dart';
+import '../../../services/notification/notification_service.dart';
 import '../../categories/widgets/add_category_bottom_sheet.dart';
 import '../../home/widgets/transaction_list_item.dart';
 
@@ -78,6 +80,13 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
       final user = ref.read(authStateProvider).value!;
       final firestoreService = ref.read(firestoreServiceProvider);
       final amount = double.parse(_amountCtrl.text);
+      final allModes = ref.read(paymentModesProvider).value ?? [];
+      final allAccounts = ref.read(accountsProvider).value ?? [];
+      final selectedMode = _findPaymentMode(allModes, _paymentModeId ?? '');
+      final selectedAccount = _findAccount(allAccounts, _accountId ?? '');
+      final newAffectsBalance = selectedMode?.type.affectsAccountBalance ?? true;
+      final currency = selectedAccount?.currency ?? 'INR';
+      final notificationsOn = ref.read(settingsProvider).notificationsEnabled;
 
       if (widget.editTransaction != null) {
         // Edit mode
@@ -90,27 +99,48 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
           accountId: _accountId ?? '',
           paymentModeId: _paymentModeId,
           notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
+          affectsBalance: newAffectsBalance,
         );
         await firestoreService.updateTransaction(updated);
 
-        // Adjust balance: handle account change
+        // Adjust balance: handle account change and affectsBalance transitions
         final oldAccountId = widget.editTransaction!.accountId;
         final oldAmount = widget.editTransaction!.amount;
         final oldType = widget.editTransaction!.type;
+        final oldAffectsBalance = widget.editTransaction!.affectsBalance;
         final oldDelta =
             oldType == TransactionType.income ? oldAmount : -oldAmount;
         final newDelta = _type == TransactionType.income ? amount : -amount;
 
         if (oldAccountId != _accountId!) {
-          // Account changed: reverse old account, apply to new account
-          await firestoreService.updateAccountBalance(
-              user.uid, oldAccountId, -oldDelta);
-          await firestoreService.updateAccountBalance(
-              user.uid, _accountId!, newDelta);
+          // Account changed: reverse old leg, apply new leg (each gated independently)
+          if (oldAffectsBalance) {
+            await firestoreService.updateAccountBalance(
+                user.uid, oldAccountId, -oldDelta);
+          }
+          if (newAffectsBalance) {
+            await firestoreService.updateAccountBalance(
+                user.uid, _accountId!, newDelta);
+          }
         } else {
-          // Same account: apply net delta
-          await firestoreService.updateAccountBalance(
-              user.uid, _accountId!, newDelta - oldDelta);
+          // Same account — 4-case balance adjustment
+          if (oldAffectsBalance && newAffectsBalance) {
+            await firestoreService.updateAccountBalance(
+                user.uid, _accountId!, newDelta - oldDelta);
+          } else if (oldAffectsBalance && !newAffectsBalance) {
+            await firestoreService.updateAccountBalance(
+                user.uid, _accountId!, -oldDelta);
+          } else if (!oldAffectsBalance && newAffectsBalance) {
+            await firestoreService.updateAccountBalance(
+                user.uid, _accountId!, newDelta);
+          }
+          // both false → no balance change
+        }
+
+        if (notificationsOn) {
+          await NotificationService.showTransactionUpdatedNotification(
+            _titleCtrl.text.trim(), amount, currency,
+            _type == TransactionType.income);
         }
       } else {
         // Create mode
@@ -127,11 +157,20 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
           paymentModeId: _paymentModeId,
           notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
           createdAt: now,
+          affectsBalance: newAffectsBalance,
         );
         await firestoreService.createTransaction(tx);
-        final delta = _type == TransactionType.income ? amount : -amount;
-        await firestoreService.updateAccountBalance(
-            user.uid, _accountId!, delta);
+        if (newAffectsBalance) {
+          final delta = _type == TransactionType.income ? amount : -amount;
+          await firestoreService.updateAccountBalance(
+              user.uid, _accountId!, delta);
+        }
+
+        if (notificationsOn) {
+          await NotificationService.showTransactionSavedNotification(
+            _titleCtrl.text.trim(), amount, currency,
+            _type == TransactionType.income);
+        }
       }
 
       if (mounted) context.pop();

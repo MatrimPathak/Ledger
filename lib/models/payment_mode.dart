@@ -10,6 +10,9 @@ enum PaymentModeType {
 }
 
 extension PaymentModeTypeExt on PaymentModeType {
+  bool get affectsAccountBalance =>
+      this != PaymentModeType.creditCard && this != PaymentModeType.cash;
+
   String get label {
     switch (this) {
       case PaymentModeType.upi:

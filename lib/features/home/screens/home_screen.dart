@@ -7,9 +7,12 @@ import '../../../models/category.dart';
 import '../../../models/payment_mode.dart';
 import '../../../models/transaction.dart';
 import '../../../providers/accounts_provider.dart';
+import '../../../providers/battery_opt_provider.dart';
 import '../../../providers/categories_provider.dart';
 import '../../../providers/payment_modes_provider.dart';
+import '../../../providers/settings_provider.dart';
 import '../../../providers/transactions_provider.dart';
+import '../../../services/battery_optimization_service.dart';
 import '../widgets/account_month_filter.dart';
 import '../widgets/category_bar_chart.dart';
 import '../widgets/summary_card.dart';
@@ -26,11 +29,37 @@ String resolveHomeCurrency(List<Account> accounts, String? accountId) {
       accounts.first.currency;
 }
 
-class HomeScreen extends ConsumerWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  // Re-check battery opt status when the user returns from system settings.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      ref.invalidate(batteryOptProvider);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final txAsync = ref.watch(filteredTransactionsProvider);
     final accountsAsync = ref.watch(accountsProvider);
@@ -42,21 +71,22 @@ class HomeScreen extends ConsumerWidget {
     final categories = categoriesAsync.value ?? [];
     final paymentModes = paymentModesAsync.value ?? [];
     final currency = resolveHomeCurrency(accounts, filter.accountId);
+    final settings = ref.watch(settingsProvider);
+    final batteryOptAsync = ref.watch(batteryOptProvider);
 
     return Scaffold(
       body: txAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('Error: $e')),
         data: (transactions) {
-          // Group transactions by date
           final grouped = _groupByDate(transactions);
 
           return CustomScrollView(
             slivers: [
-              // App Bar
               SliverAppBar(
                 floating: true,
                 snap: true,
+                backgroundColor: theme.scaffoldBackgroundColor,
                 title: const Text('Ledger',
                     style: TextStyle(fontWeight: FontWeight.w800)),
                 centerTitle: false,
@@ -65,7 +95,21 @@ class HomeScreen extends ConsumerWidget {
                   child: AccountMonthFilter(accounts: accounts),
                 ),
               ),
-              // Summary Card
+              // Battery optimization warning — shown only when auto-detect
+              // is on but background execution is still restricted by Android.
+              if (settings.autoDetectEnabled)
+                batteryOptAsync.maybeWhen(
+                  data: (isIgnoring) => isIgnoring
+                      ? const SliverToBoxAdapter(child: SizedBox.shrink())
+                      : SliverToBoxAdapter(
+                          child: _BatteryOptBanner(
+                            onFix: () =>
+                                BatteryOptimizationService.requestIgnore(),
+                          ),
+                        ),
+                  orElse: () =>
+                      const SliverToBoxAdapter(child: SizedBox.shrink()),
+                ),
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.only(top: 16, bottom: 12),
@@ -77,7 +121,6 @@ class HomeScreen extends ConsumerWidget {
                   ),
                 ),
               ),
-              // Category chart
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.only(bottom: 12),
@@ -88,7 +131,6 @@ class HomeScreen extends ConsumerWidget {
                   ),
                 ),
               ),
-              // Transactions header
               SliverToBoxAdapter(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
@@ -98,7 +140,6 @@ class HomeScreen extends ConsumerWidget {
                       )),
                 ),
               ),
-              // Transaction list grouped by date
               if (grouped.isEmpty)
                 SliverFillRemaining(
                   hasScrollBody: false,
@@ -113,7 +154,8 @@ class HomeScreen extends ConsumerWidget {
                         const SizedBox(height: 16),
                         Text('No transactions yet',
                             style: theme.textTheme.titleMedium?.copyWith(
-                              color: theme.colorScheme.onSurface.withOpacity(0.5),
+                              color:
+                                  theme.colorScheme.onSurface.withOpacity(0.5),
                             )),
                         const SizedBox(height: 8),
                         Text('Tap + to add your first transaction',
@@ -126,7 +168,6 @@ class HomeScreen extends ConsumerWidget {
                 SliverList(
                   delegate: SliverChildBuilderDelegate(
                     (context, index) {
-                      // Build a flat list with date headers
                       int itemIndex = 0;
                       for (final group in grouped.entries) {
                         if (index == itemIndex) {
@@ -137,7 +178,8 @@ class HomeScreen extends ConsumerWidget {
                           if (index == itemIndex) {
                             return TransactionListItem(
                               transaction: tx,
-                              category: _findCategory(tx.categoryId, categories),
+                              category:
+                                  _findCategory(tx.categoryId, categories),
                               paymentMode: _findPaymentMode(
                                   tx.paymentModeId, paymentModes),
                               onTap: () => context.push(
@@ -190,6 +232,50 @@ class HomeScreen extends ConsumerWidget {
     } catch (_) {
       return null;
     }
+  }
+}
+
+class _BatteryOptBanner extends StatelessWidget {
+  final VoidCallback onFix;
+  const _BatteryOptBanner({required this.onFix});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.orange.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orange.withOpacity(0.4)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.battery_alert_outlined,
+              color: Colors.orange, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'Allow background access for real-time SMS detection',
+              style: theme.textTheme.bodySmall
+                  ?.copyWith(color: Colors.orange[800]),
+            ),
+          ),
+          const SizedBox(width: 8),
+          TextButton(
+            onPressed: onFix,
+            style: TextButton.styleFrom(
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              foregroundColor: Colors.orange[800],
+            ),
+            child: const Text('Fix Now',
+                style: TextStyle(fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
   }
 }
 

@@ -8,9 +8,11 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/battery_opt_provider.dart';
 import '../../../providers/firestore_provider.dart';
 import '../../../providers/settings_provider.dart';
 import '../../../services/sms/sms_service.dart';
+import '../../../services/battery_optimization_service.dart';
 
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
@@ -122,6 +124,27 @@ class SettingsScreen extends ConsumerWidget {
                   onChanged: (v) => _toggleAutoDetect(context, ref, v),
                 ),
               ),
+              if (settings.autoDetectEnabled)
+                ref.watch(batteryOptProvider).maybeWhen(
+                  data: (isIgnoring) => _SettingsTile(
+                    icon: isIgnoring
+                        ? Icons.battery_charging_full_outlined
+                        : Icons.battery_alert_outlined,
+                    iconColor: isIgnoring ? Colors.green : Colors.orange,
+                    title: 'Background Processing',
+                    subtitle: isIgnoring
+                        ? 'Battery optimization disabled — SMS processed immediately'
+                        : 'Tap to open battery settings and disable optimization for Ledger',
+                    trailing: isIgnoring
+                        ? const Icon(Icons.check_circle_outline,
+                            color: Colors.green)
+                        : null,
+                    onTap: isIgnoring
+                        ? null
+                        : () => BatteryOptimizationService.requestIgnore(),
+                  ),
+                  orElse: () => const SizedBox.shrink(),
+                ),
               // AI
               _SectionHeader('AI'),
               _SettingsTile(
@@ -231,6 +254,14 @@ class SettingsScreen extends ConsumerWidget {
       }
       await ref.read(settingsProvider.notifier).setAutoDetect(true);
       SmsService().startListening();
+      // Automatically disable battery optimization so the SMS background
+      // handler can make network calls immediately — no Doze delay.
+      if (context.mounted) {
+        final isIgnoring = await BatteryOptimizationService.isIgnoring();
+        if (!isIgnoring) {
+          await BatteryOptimizationService.requestIgnore();
+        }
+      }
     } else {
       await ref.read(settingsProvider.notifier).setAutoDetect(false);
     }
