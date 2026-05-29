@@ -18,6 +18,7 @@ class Transaction {
   final TransactionSource source;
   final String? rawSms;
   final DateTime createdAt;
+  final bool affectsBalance;
 
   const Transaction({
     required this.id,
@@ -33,6 +34,7 @@ class Transaction {
     this.source = TransactionSource.manual,
     this.rawSms,
     required this.createdAt,
+    this.affectsBalance = true,
   });
 
   factory Transaction.fromFirestore(DocumentSnapshot doc) {
@@ -55,6 +57,7 @@ class Transaction {
           : TransactionSource.manual,
       rawSms: data['rawSms'],
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      affectsBalance: data['affectsBalance'] as bool? ?? true,
     );
   }
 
@@ -71,6 +74,7 @@ class Transaction {
         'source': source.name,
         'rawSms': rawSms,
         'createdAt': Timestamp.fromDate(createdAt),
+        'affectsBalance': affectsBalance,
       };
 
   Transaction copyWith({
@@ -85,6 +89,7 @@ class Transaction {
     String? notes,
     bool clearPaymentModeId = false,
     bool clearNotes = false,
+    bool? affectsBalance,
   }) =>
       Transaction(
         id: id ?? this.id,
@@ -101,5 +106,6 @@ class Transaction {
         source: source,
         rawSms: rawSms,
         createdAt: createdAt,
+        affectsBalance: affectsBalance ?? this.affectsBalance,
       );
 }

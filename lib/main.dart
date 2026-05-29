@@ -48,7 +48,13 @@ void main() async {
   }
 
   if (prefs.getBool(AppConstants.prefKeyAutoDetect) == true) {
-    SmsService().startListening();
+    final smsService = SmsService();
+    smsService.startListening();
+    // Process any bank SMS that arrived while the app was closed (e.g. during
+    // Doze mode). Fire-and-forget — does not block app startup.
+    if (uid != null) {
+      smsService.processMissedSms(uid, prefs);
+    }
   }
 
   runApp(
