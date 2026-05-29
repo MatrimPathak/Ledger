@@ -18,15 +18,23 @@ class MainActivity : FlutterActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "isIgnoringBatteryOptimizations" -> {
-                    val pm = getSystemService(POWER_SERVICE) as PowerManager
-                    result.success(pm.isIgnoringBatteryOptimizations(packageName))
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                        val pm = getSystemService(POWER_SERVICE) as PowerManager
+                        result.success(pm.isIgnoringBatteryOptimizations(packageName))
+                    } else {
+                        result.success(true) // No Doze on pre-M devices
+                    }
                 }
                 "requestIgnoreBatteryOptimizations" -> {
                     // Opens the general battery-optimization settings list (Play-compliant).
                     // ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS is restricted by Play policy.
-                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                    startActivity(intent)
-                    result.success(null)
+                    try {
+                        val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                        startActivity(intent)
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("NO_SETTINGS", "Battery optimization settings unavailable", null)
+                    }
                 }
                 else -> result.notImplemented()
             }

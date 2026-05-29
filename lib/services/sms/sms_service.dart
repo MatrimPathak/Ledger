@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:another_telephony/telephony.dart';
+import 'package:collection/collection.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -66,6 +67,18 @@ Future<void> _markProcessed(String fingerprint, SharedPreferences prefs) async {
     if (ids.length > 300) ids.removeRange(0, ids.length - 300);
     await prefs.setString(AppConstants.prefKeyProcessedSmsIds, jsonEncode(ids));
   }
+}
+
+// Returns true for pre-debit notification SMS (e-mandate / NACH). These record
+// the upcoming deduction but must NOT affect the account balance because the
+// actual debit will arrive as a separate SMS and adjust the balance then.
+bool _isPreDebitNotification(String body) {
+  final lower = body.toLowerCase();
+  return lower.contains('e-mandate') ||
+      lower.contains('emandate') ||
+      lower.contains('will be deducted') ||
+      lower.contains('auto debit') ||
+      lower.contains('auto-debit');
 }
 
 // Looks up a category by slug. If none matches, creates one from the default
@@ -186,7 +199,12 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     final resolvedMode = parsed.paymentModeId != null
         ? paymentModes.where((m) => m.id == parsed.paymentModeId).firstOrNull
         : null;
-    final affectsBalance = resolvedMode?.type.affectsAccountBalance ?? true;
+    // Pre-debit notifications (e-mandate, NACH) record the intent but must NOT
+    // affect the balance — the actual bank debit arrives as a separate SMS and
+    // will adjust the balance when it is processed.
+    final isPreDebit = _isPreDebitNotification(body);
+    final affectsBalance =
+        isPreDebit ? false : (resolvedMode?.type.affectsAccountBalance ?? true);
 
     final transaction = tx_model.Transaction(
       id: '',
@@ -204,6 +222,16 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       affectsBalance: affectsBalance,
     );
 
+    // Mark processed before writing to Firestore so a concurrent isolate
+    // won't pass the dedup check and create a duplicate transaction.
+    await _markProcessed(fingerprint, prefs);
+    if (smsTimestamp != null) {
+      final last = prefs.getInt(AppConstants.prefKeyLastSmsTimestamp) ?? 0;
+      if (smsTimestamp > last) {
+        await prefs.setInt(AppConstants.prefKeyLastSmsTimestamp, smsTimestamp);
+      }
+    }
+
     final saved = await firestoreService.createTransaction(transaction);
 
     if (resolvedAccountId != null && affectsBalance) {
@@ -211,14 +239,6 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
           ? parsed.amount
           : -parsed.amount;
       await firestoreService.updateAccountBalance(uid, resolvedAccountId, delta);
-    }
-
-    await _markProcessed(fingerprint, prefs);
-    if (smsTimestamp != null) {
-      final last = prefs.getInt(AppConstants.prefKeyLastSmsTimestamp) ?? 0;
-      if (smsTimestamp > last) {
-        await prefs.setInt(AppConstants.prefKeyLastSmsTimestamp, smsTimestamp);
-      }
     }
 
     final currency = accounts.isNotEmpty ? accounts.first.currency : 'INR';
@@ -346,7 +366,9 @@ class SmsService {
         final resolvedMode = parsed.paymentModeId != null
             ? paymentModes.where((m) => m.id == parsed.paymentModeId).firstOrNull
             : null;
-        final affectsBalance = resolvedMode?.type.affectsAccountBalance ?? true;
+        final isPreDebit = _isPreDebitNotification(body);
+        final affectsBalance =
+            isPreDebit ? false : (resolvedMode?.type.affectsAccountBalance ?? true);
 
         final transaction = tx_model.Transaction(
           id: '',
@@ -364,6 +386,16 @@ class SmsService {
           affectsBalance: affectsBalance,
         );
 
+        // Mark before writing so a concurrent backgroundSmsHandler won't
+        // create a duplicate transaction for the same SMS.
+        await _markProcessed(fingerprint, prefs);
+        if (smsTimestamp != null) {
+          final last = prefs.getInt(AppConstants.prefKeyLastSmsTimestamp) ?? 0;
+          if (smsTimestamp > last) {
+            await prefs.setInt(AppConstants.prefKeyLastSmsTimestamp, smsTimestamp);
+          }
+        }
+
         final saved = await firestoreService.createTransaction(transaction);
 
         if (resolvedAccountId != null && affectsBalance) {
@@ -371,14 +403,6 @@ class SmsService {
               ? parsed.amount
               : -parsed.amount;
           await firestoreService.updateAccountBalance(uid, resolvedAccountId, delta);
-        }
-
-        await _markProcessed(fingerprint, prefs);
-        if (smsTimestamp != null) {
-          final last = prefs.getInt(AppConstants.prefKeyLastSmsTimestamp) ?? 0;
-          if (smsTimestamp > last) {
-            await prefs.setInt(AppConstants.prefKeyLastSmsTimestamp, smsTimestamp);
-          }
         }
 
         final currency = accounts.isNotEmpty ? accounts.first.currency : 'INR';

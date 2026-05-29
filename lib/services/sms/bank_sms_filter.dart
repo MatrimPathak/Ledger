@@ -1,4 +1,5 @@
 class BankSmsFilter {
+  // Simple substring keywords — safe because they're long or domain-specific.
   static const _keywords = [
     'debited',
     'credited',
@@ -18,16 +19,22 @@ class BankSmsFilter {
     'bank',
     'e-mandate',
     'emandate',
-    'mandate',
-    'nach',
-    'umn',
     'will be deducted',
     'auto debit',
     'auto-debit',
   ];
 
+  // Short / generic tokens that need whole-word matching to avoid false
+  // positives (e.g. "umn" in "autumn", "nach" in "spinach").
+  static final _wordBoundaryPatterns = [
+    RegExp(r'\bnach\b'),
+    RegExp(r'\bumn\b'),
+    RegExp(r'\bmandate\b'),
+  ];
+
   static bool looksLikeBankSms(String body) {
     final lower = body.toLowerCase();
-    return _keywords.any((k) => lower.contains(k));
+    return _keywords.any((k) => lower.contains(k)) ||
+        _wordBoundaryPatterns.any((p) => p.hasMatch(lower));
   }
 }
