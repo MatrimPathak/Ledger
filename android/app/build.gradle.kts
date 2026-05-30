@@ -50,4 +50,14 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     implementation("androidx.multidex:multidex:2.0.1")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
+
+    // Firebase deps are declared 'implementation' in the Flutter plugins so they
+    // are not transitively visible to the app module. Declare them here explicitly
+    // so SmsProcessingWorker can compile against the Firestore and Firebase APIs.
+    implementation(platform("com.google.firebase:firebase-bom:33.7.0"))
+    implementation("com.google.firebase:firebase-firestore-ktx")
+    implementation("com.google.firebase:firebase-common-ktx")
+
+    // Provides kotlinx.coroutines.tasks.await() for Firebase Task<T> suspension.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
 }
