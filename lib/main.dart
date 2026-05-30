@@ -53,7 +53,7 @@ void main() async {
     // Process any bank SMS that arrived while the app was closed (e.g. during
     // Doze mode). Fire-and-forget — does not block app startup.
     if (uid != null) {
-      smsService.processMissedSms(uid, prefs);
+      smsService.processMissedSms(uid, prefs).catchError((_) {});
     }
   }
 

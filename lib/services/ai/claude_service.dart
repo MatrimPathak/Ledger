@@ -100,6 +100,11 @@ PaymentModes: [$modesContext]
 
 SMS: "$smsBody"
 
+Special cases:
+- E-Mandate / NACH / auto-debit notifications ("will be deducted", "E-Mandate!", "UMN"): treat as expense, extract the mandate description as title (e.g. "Amazon India" from "Amazon India mandate"), use "bills" as category.
+- Credit card bill payment: treat as expense, category "bills".
+- ATM withdrawal: treat as expense, category "other".
+
 Return JSON:
 {
   "title": "merchant or description (max 30 chars)",

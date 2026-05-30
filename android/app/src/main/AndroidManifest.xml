@@ -1,10 +1,13 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.RECEIVE_SMS"/>
     <uses-permission android:name="android.permission.READ_SMS"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- Required by WorkManager for backward compat on Android 11 and below -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
 
     <application
         android:label="Ledger"
@@ -29,12 +32,20 @@
             </intent-filter>
         </activity>
 
-        <!-- another_telephony background SMS receiver for bank transaction auto-detection -->
+        <!-- Disable another_telephony's background receiver — our native SmsReceiver handles it. -->
         <receiver
             android:name="com.shounakmulay.telephony.sms.IncomingSmsReceiver"
+            android:enabled="false"
+            android:exported="false"
+            tools:node="replace"/>
+
+        <!-- Native receiver: captures bank SMS when app is killed and enqueues a
+             WorkManager expedited job. No persistent notification on Android 12+. -->
+        <receiver
+            android:name=".SmsReceiver"
             android:exported="true"
             android:permission="android.permission.BROADCAST_SMS">
-            <intent-filter android:priority="999">
+            <intent-filter android:priority="1000">
                 <action android:name="android.provider.Telephony.SMS_RECEIVED"/>
             </intent-filter>
         </receiver>

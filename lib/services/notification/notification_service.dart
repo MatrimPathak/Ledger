@@ -122,6 +122,7 @@ class NotificationService {
 
   static Future<void> showTransactionSavedNotification(
       String title, double amount, String currency, bool isIncome) async {
+    if (!notificationsEnabled) return;
     final formatted = CurrencyFormatter.format(amount, currency: currency);
     final typeLabel = isIncome ? 'income' : 'expense';
     const androidDetails = AndroidNotificationDetails(
@@ -141,6 +142,7 @@ class NotificationService {
 
   static Future<void> showTransactionUpdatedNotification(
       String title, double amount, String currency, bool isIncome) async {
+    if (!notificationsEnabled) return;
     final formatted = CurrencyFormatter.format(amount, currency: currency);
     final typeLabel = isIncome ? 'income' : 'expense';
     const androidDetails = AndroidNotificationDetails(
@@ -159,6 +161,7 @@ class NotificationService {
   }
 
   static Future<void> showTransactionDeletedNotification(String title) async {
+    if (!notificationsEnabled) return;
     const androidDetails = AndroidNotificationDetails(
       _txChannelId,
       _txChannelName,
