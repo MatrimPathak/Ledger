@@ -262,12 +262,15 @@ class SmsService {
   }
 
   void startListening() {
+    // Background SMS is handled by the native SmsReceiver + WorkManager pipeline
+    // (SmsReceiver.kt / SmsProcessingWorker.kt), which works reliably on modern
+    // Android without a persistent notification. This callback only fires while
+    // the app is in the foreground.
     _telephony.listenIncomingSms(
       onNewMessage: (SmsMessage message) {
         backgroundSmsHandler(message);
       },
-      listenInBackground: true,
-      onBackgroundMessage: backgroundSmsHandler,
+      listenInBackground: false,
     );
   }
 
