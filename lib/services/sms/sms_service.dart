@@ -130,6 +130,19 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
   final fingerprint = _smsFingerprint(message);
   if (_isAlreadyProcessed(fingerprint, prefs)) return;
 
+  // Pre-debit notifications are advance warnings — the actual debit arrives as a
+  // separate SMS. Mark as processed so the catch-up scan skips them on next open.
+  if (_isPreDebitNotification(body)) {
+    await _markProcessed(fingerprint, prefs);
+    if (smsTimestamp != null) {
+      final last = prefs.getInt(AppConstants.prefKeyLastSmsTimestamp) ?? 0;
+      if (smsTimestamp > last) {
+        await prefs.setInt(AppConstants.prefKeyLastSmsTimestamp, smsTimestamp);
+      }
+    }
+    return;
+  }
+
   // Honour the user's notification preference in the background isolate.
   NotificationService.notificationsEnabled =
       prefs.getBool(AppConstants.prefKeyNotifications) ?? true;
@@ -335,6 +348,16 @@ class SmsService {
       }
 
       final body = sms.body ?? '';
+      if (_isPreDebitNotification(body)) {
+        await _markProcessed(fingerprint, prefs);
+        if (smsTimestamp != null) {
+          final last = prefs.getInt(AppConstants.prefKeyLastSmsTimestamp) ?? 0;
+          if (smsTimestamp > last) {
+            await prefs.setInt(AppConstants.prefKeyLastSmsTimestamp, smsTimestamp);
+          }
+        }
+        continue;
+      }
       try {
         final parsed = await claudeService.parseSmsTransaction(
           smsBody: body,

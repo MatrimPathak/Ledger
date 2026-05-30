@@ -63,6 +63,13 @@ class SmsProcessingWorker(
             ?: return Result.success()
         val notificationsEnabled = prefs.getBoolean("${P}notifications_enabled", true)
 
+        // Pre-debit notifications are advance warnings — the actual debit arrives as a
+        // separate SMS. Mark processed so catch-up scan skips them on next app open.
+        if (isPreDebitNotification(smsBody)) {
+            markProcessed(fingerprint, smsTimestamp, prefs)
+            return Result.success()
+        }
+
         try {
             try { FirebaseApp.initializeApp(applicationContext) } catch (_: Exception) {}
             val db = FirebaseFirestore.getInstance()
@@ -244,7 +251,6 @@ PaymentModes: [$modesJson]
 SMS: "$smsBody"
 
 Special cases:
-- E-Mandate / NACH / auto-debit notifications ("will be deducted", "E-Mandate!", "UMN"): treat as expense, extract the mandate description as title (e.g. "Amazon India" from "Amazon India mandate"), use "bills" as category.
 - Credit card bill payment: treat as expense, category "bills".
 - ATM withdrawal: treat as expense, category "other".
 
