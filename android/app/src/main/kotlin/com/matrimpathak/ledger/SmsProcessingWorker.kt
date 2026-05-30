@@ -80,10 +80,9 @@ class SmsProcessingWorker(
             val parsed = callClaudeApi(apiKey, smsBody, accounts, paymentModes)
                 ?: return Result.success()
 
-            val isPreDebit = isPreDebitNotification(smsBody)
             val modeType = paymentModes.firstOrNull { it["id"] == parsed.paymentModeId }
                 ?.get("type") as? String
-            val affectsBalance = !isPreDebit && modeType != "creditCard" && modeType != "cash"
+            val affectsBalance = modeType != "creditCard" && modeType != "cash"
 
             val categories = fetchCategories(db, uid)
             val categoryId = resolveOrCreateCategory(parsed.categorySlug, categories, uid, db)

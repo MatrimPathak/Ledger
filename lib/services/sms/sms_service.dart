@@ -212,12 +212,7 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     final resolvedMode = parsed.paymentModeId != null
         ? paymentModes.where((m) => m.id == parsed.paymentModeId).firstOrNull
         : null;
-    // Pre-debit notifications (e-mandate, NACH) record the intent but must NOT
-    // affect the balance — the actual bank debit arrives as a separate SMS and
-    // will adjust the balance when it is processed.
-    final isPreDebit = _isPreDebitNotification(body);
-    final affectsBalance =
-        isPreDebit ? false : (resolvedMode?.type.affectsAccountBalance ?? true);
+    final affectsBalance = resolvedMode?.type.affectsAccountBalance ?? true;
 
     final transaction = tx_model.Transaction(
       id: '',
@@ -392,9 +387,7 @@ class SmsService {
         final resolvedMode = parsed.paymentModeId != null
             ? paymentModes.where((m) => m.id == parsed.paymentModeId).firstOrNull
             : null;
-        final isPreDebit = _isPreDebitNotification(body);
-        final affectsBalance =
-            isPreDebit ? false : (resolvedMode?.type.affectsAccountBalance ?? true);
+        final affectsBalance = resolvedMode?.type.affectsAccountBalance ?? true;
 
         final transaction = tx_model.Transaction(
           id: '',
