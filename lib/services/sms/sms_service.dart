@@ -130,6 +130,14 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
   final fingerprint = _smsFingerprint(message);
   if (_isAlreadyProcessed(fingerprint, prefs)) return;
 
+  // E-mandate / NACH pre-debit notifications are not real transactions — the
+  // actual debit arrives as a separate SMS. Skip them entirely so they never
+  // appear in the transaction list.
+  if (_isPreDebitNotification(body)) {
+    await _markProcessed(fingerprint, prefs);
+    return;
+  }
+
   // Honour the user's notification preference in the background isolate.
   NotificationService.notificationsEnabled =
       prefs.getBool(AppConstants.prefKeyNotifications) ?? true;
@@ -199,12 +207,7 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     final resolvedMode = parsed.paymentModeId != null
         ? paymentModes.where((m) => m.id == parsed.paymentModeId).firstOrNull
         : null;
-    // Pre-debit notifications (e-mandate, NACH) record the intent but must NOT
-    // affect the balance — the actual bank debit arrives as a separate SMS and
-    // will adjust the balance when it is processed.
-    final isPreDebit = _isPreDebitNotification(body);
-    final affectsBalance =
-        isPreDebit ? false : (resolvedMode?.type.affectsAccountBalance ?? true);
+    final affectsBalance = resolvedMode?.type.affectsAccountBalance ?? true;
 
     final transaction = tx_model.Transaction(
       id: '',
