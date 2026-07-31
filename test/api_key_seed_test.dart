@@ -24,6 +24,16 @@ void main() {
       expect(seed, 'secure-key');
     });
 
+    test('uses secure storage when the shared key is still the placeholder', () {
+      final seed = resolveSharedApiKeySeed(
+        sharedPreferencesKey: AppConstants.claudeApiKeyPlaceholder,
+        secureStorageKey: 'secure-key',
+        environmentKey: 'env-key',
+      );
+
+      expect(seed, 'secure-key');
+    });
+
     test('falls back to the environment key for placeholder shared keys', () {
       final seed = resolveSharedApiKeySeed(
         sharedPreferencesKey: AppConstants.claudeApiKeyPlaceholder,

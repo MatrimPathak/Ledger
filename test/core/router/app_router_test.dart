@@ -59,6 +59,23 @@ void main() {
       expect(redirect, '/home');
     });
 
+    test('keeps signed-in users on protected routes without profile lookup',
+        () async {
+      var loadedProfile = false;
+
+      final redirect = await resolveAuthRedirect(
+        userId: 'user-1',
+        location: '/home',
+        loadProfile: (_) {
+          loadedProfile = true;
+          return _profile(onboardingComplete: true);
+        },
+      );
+
+      expect(redirect, isNull);
+      expect(loadedProfile, isFalse);
+    });
+
     test('falls back home when profile lookup fails after sign-in', () async {
       final redirect = await resolveAuthRedirect(
         userId: 'user-1',
