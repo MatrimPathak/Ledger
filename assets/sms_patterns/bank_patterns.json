@@ -1,5 +1,5 @@
 {
-  "_comment": "Declarative bank-SMS pattern rules, shared verbatim by the Dart parser (lib/services/sms/local_sms_parser.dart) and the Kotlin parser (android/app/src/main/kotlin/.../LocalSmsParser.kt) so both interpreters extract identical fields from identical input. Populated in full as part of the local deterministic SMS parser work; this skeleton only carries the coarse prefilter keywords migrated from BankSmsFilter so both languages can agree on the prefilter without duplicating the list by hand.",
+  "_comment": "Declarative bank-SMS pattern rules, shared verbatim by the Dart parser (lib/services/sms/local_sms_parser.dart) and the Kotlin parser (android/app/src/main/kotlin/com/matrimpathak/ledger/LocalSmsParser.kt) so both interpreters extract identical fields from identical input. Rules are pure data (keyword gates + regexes with one capture group each) — no branching logic lives here, only field extraction. Both interpreters compute the confidence score themselves from whichever fields a rule successfully extracts (see local_sms_parser.dart's rubric doc comment), so a rule only needs to describe WHERE to find each field, not how confident that makes the result.",
   "version": 1,
   "globalKeywords": [
     "debited",
@@ -29,5 +29,103 @@
     "umn",
     "mandate"
   ],
-  "rules": []
+  "preDebitKeywords": [
+    "e-mandate",
+    "emandate",
+    "will be deducted",
+    "auto debit",
+    "auto-debit"
+  ],
+  "amountRegex": "(?:rs\\.?|inr)\\s*([0-9][0-9,]*(?:\\.[0-9]{1,2})?)",
+  "accountLastDigitsRegex": "(?:a\\/?c|card)\\s*(?:no\\.?|ending)?\\s*[x\\*]*([0-9]{4,6})\\b",
+  "rules": [
+    {
+      "id": "upi_debit",
+      "paymentMethod": "upi",
+      "direction": "debit",
+      "txnCategoryHint": null,
+      "keywords": ["upi"],
+      "requireKeywords": ["debited"],
+      "excludeKeywords": ["credited"],
+      "refNumberRegex": "upi[:\\s]*ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
+      "merchantRegex": "(?:trf to|paid to|to vpa|to)\\s+([a-z0-9@.\\-_ ]{2,40}?)(?:\\s+on\\b|\\s+upi\\b|\\.|,|$)"
+    },
+    {
+      "id": "upi_credit",
+      "paymentMethod": "upi",
+      "direction": "credit",
+      "txnCategoryHint": null,
+      "keywords": ["upi"],
+      "requireKeywords": ["credited"],
+      "excludeKeywords": ["debited"],
+      "refNumberRegex": "upi[:\\s]*ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
+      "merchantRegex": "(?:trf from|received from|from vpa|from)\\s+([a-z0-9@.\\-_ ]{2,40}?)(?:\\s+on\\b|\\s+upi\\b|\\.|,|$)"
+    },
+    {
+      "id": "credit_card_bill_payment",
+      "paymentMethod": "creditCard",
+      "direction": "debit",
+      "txnCategoryHint": "creditCardPayment",
+      "keywords": ["credit card"],
+      "requireKeywords": ["bill payment received", "payment received", "bill paid", "card payment of"],
+      "excludeKeywords": [],
+      "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
+      "merchantRegex": null
+    },
+    {
+      "id": "credit_card_purchase",
+      "paymentMethod": "creditCard",
+      "direction": "debit",
+      "txnCategoryHint": "creditCardPurchase",
+      "keywords": ["credit card"],
+      "requireKeywords": ["spent", "purchase", "used for", "txn of"],
+      "excludeKeywords": ["bill payment received", "payment received", "bill paid"],
+      "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
+      "merchantRegex": "(?:at|on)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
+    },
+    {
+      "id": "atm_withdrawal",
+      "paymentMethod": "atm",
+      "direction": "debit",
+      "txnCategoryHint": "expense",
+      "keywords": ["atm"],
+      "requireKeywords": ["withdraw", "withdrawn", "cash wdl"],
+      "excludeKeywords": [],
+      "refNumberRegex": null,
+      "merchantRegex": null
+    },
+    {
+      "id": "refund",
+      "paymentMethod": null,
+      "direction": "credit",
+      "txnCategoryHint": "refund",
+      "keywords": ["refund", "reversal", "reversed"],
+      "requireKeywords": [],
+      "excludeKeywords": [],
+      "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
+      "merchantRegex": "(?:from|by)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
+    },
+    {
+      "id": "bank_debit_generic",
+      "paymentMethod": "bankTransfer",
+      "direction": "debit",
+      "txnCategoryHint": null,
+      "keywords": ["debited"],
+      "requireKeywords": [],
+      "excludeKeywords": ["credited"],
+      "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
+      "merchantRegex": "(?:to|towards)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
+    },
+    {
+      "id": "bank_credit_generic",
+      "paymentMethod": "bankTransfer",
+      "direction": "credit",
+      "txnCategoryHint": null,
+      "keywords": ["credited"],
+      "requireKeywords": [],
+      "excludeKeywords": ["debited"],
+      "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
+      "merchantRegex": "(?:from|by)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
+    }
+  ]
 }

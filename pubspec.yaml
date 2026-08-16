@@ -32,6 +32,12 @@ dependencies:
   # HTTP for Claude API
   http: ^1.2.2
 
+  # SMS/notification content hashing for dedup fingerprints
+  crypto: ^3.0.3
+
+  # Collection helpers (firstOrNull etc.) used by the SMS pipeline
+  collection: ^1.18.0
+
   # Persistence
   shared_preferences: ^2.3.2
   flutter_secure_storage: ^9.0.0

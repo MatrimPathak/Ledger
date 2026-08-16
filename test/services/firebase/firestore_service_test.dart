@@ -274,6 +274,67 @@ void main() {
       expect((await accounts.doc('checking').get()).data()!['balance'], 1000);
     });
   });
+
+  group('FirestoreService dedup checks', () {
+    test('transactionExistsByExternalRef finds a matching reference number',
+        () async {
+      final firestore = FakeFirebaseFirestore();
+      final service = FirestoreService(firestore: firestore);
+      await service.createTransactionWithBalanceUpdate(
+        _newTransaction().copyWith(
+          externalTransactionId: () => 'UTR123456',
+        ),
+      );
+
+      expect(
+        await service.transactionExistsByExternalRef('user-1', 'UTR123456'),
+        isTrue,
+      );
+      expect(
+        await service.transactionExistsByExternalRef('user-1', 'UTR999999'),
+        isFalse,
+      );
+    });
+
+    test('transactionExistsByHashNearby finds a matching hash within the time window',
+        () async {
+      final firestore = FakeFirebaseFirestore();
+      final service = FirestoreService(firestore: firestore);
+      final txDate = DateTime.utc(2026, 6, 1, 12, 0);
+      await service.createTransactionWithBalanceUpdate(
+        _newTransaction().copyWith(
+          date: txDate,
+          sourceMessageHash: () => 'hash-abc',
+        ),
+      );
+
+      expect(
+        await service.transactionExistsByHashNearby(
+          'user-1',
+          'hash-abc',
+          txDate.add(const Duration(minutes: 1)),
+        ),
+        isTrue,
+      );
+      expect(
+        await service.transactionExistsByHashNearby(
+          'user-1',
+          'hash-abc',
+          txDate.add(const Duration(minutes: 10)),
+        ),
+        isFalse,
+        reason: 'outside the default 2-minute window',
+      );
+      expect(
+        await service.transactionExistsByHashNearby(
+          'user-1',
+          'hash-different',
+          txDate,
+        ),
+        isFalse,
+      );
+    });
+  });
 }
 
 app_model.Transaction _newTransaction({

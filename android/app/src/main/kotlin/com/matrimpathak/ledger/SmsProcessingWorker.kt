@@ -22,6 +22,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.security.MessageDigest
 import java.util.Date
 
 /**
@@ -32,6 +33,14 @@ import java.util.Date
  *
  * All Firestore and Claude API work runs natively in Kotlin so there is no Flutter
  * engine to boot, which makes the job fast and reliable on any Android version.
+ *
+ * Mirrors the Dart pipeline (lib/services/sms/sms_service.dart) field-for-field:
+ * local deterministic parsing first (LocalSmsParser, same
+ * assets/sms_patterns/bank_patterns.json rule set), three-tier confidence
+ * routing (high confidence skips the Claude call entirely), and offline-first
+ * transaction creation — a transaction is written whenever an amount was
+ * resolved either locally or via AI, never silently dropped the way a failed/
+ * low-confidence AI call used to.
  */
 class SmsProcessingWorker(
     context: Context,
@@ -52,16 +61,21 @@ class SmsProcessingWorker(
         if (!prefs.getBoolean("${P}auto_detect_enabled", false)) return Result.success()
         if (isAlreadyProcessed(fingerprint, prefs)) return Result.success()
 
-        // Skip if Dart's processMissedSms already handled this SMS after the app opened.
         val lastProcessed = prefs.getLong("${P}last_sms_timestamp", 0L)
         if (smsTimestamp <= lastProcessed) return Result.success()
 
         val uid = prefs.getString("${P}uid", null)?.takeIf { it.isNotBlank() }
             ?: return Result.success()
-        val apiKey = prefs.getString("${P}claude_api_key", null)
-            ?.takeIf { it.isNotBlank() && it != "YOUR_CLAUDE_API_KEY" }
-            ?: return Result.success()
         val notificationsEnabled = prefs.getBoolean("${P}notifications_enabled", true)
+
+        // E-mandate / NACH pre-debit notifications are not real transactions —
+        // the actual debit arrives as a separate SMS. Skip entirely so they
+        // never appear in the transaction list (matches sms_service.dart's
+        // backgroundSmsHandler).
+        if (isPreDebitNotification(smsBody)) {
+            markProcessed(fingerprint, smsTimestamp, prefs)
+            return Result.success()
+        }
 
         try {
             try { FirebaseApp.initializeApp(applicationContext) } catch (_: Exception) {}
@@ -70,62 +84,122 @@ class SmsProcessingWorker(
             val accounts = fetchAccounts(db, uid)
             val paymentModes = fetchPaymentModes(db, uid)
 
-            val parsed = callClaudeApi(apiKey, smsBody, accounts, paymentModes)
-                ?: return Result.success()
+            val txDate = Date(smsTimestamp)
+            val sourceMessageHash = computeSmsHash(smsBody)
 
-            val isPreDebit = isPreDebitNotification(smsBody)
-            val modeType = paymentModes.firstOrNull { it["id"] == parsed.paymentModeId }
-                ?.get("type") as? String
-            val affectsBalance = !isPreDebit && modeType != "creditCard" && modeType != "cash"
+            val localParser = LocalSmsParser.loadFromAssets(applicationContext)
+            val local = localParser.parse(smsBody, accounts, paymentModes)
+
+            // Firestore-side dedup on top of the device-local fingerprint check
+            // above — catches the case where app data was cleared/reinstalled.
+            val alreadyExists = if (local.referenceNumber != null) {
+                transactionExistsByExternalRef(db, uid, local.referenceNumber)
+            } else {
+                transactionExistsByHashNearby(db, uid, sourceMessageHash, txDate)
+            }
+            if (alreadyExists) {
+                markProcessed(fingerprint, smsTimestamp, prefs)
+                return Result.success()
+            }
+
+            // Three-tier routing: high confidence never touches the cloud.
+            var aiParsed: ParsedSms? = null
+            if (!local.isHighConfidence) {
+                val apiKey = prefs.getString("${P}claude_api_key", null)
+                    ?.takeIf { it.isNotBlank() && it != "YOUR_CLAUDE_API_KEY" }
+                if (apiKey != null) {
+                    aiParsed = callClaudeApi(apiKey, smsBody, accounts, paymentModes)
+                }
+            }
+
+            val resolvedAmount = aiParsed?.amount ?: local.amount
+            if (resolvedAmount == null || !isPlausibleAmount(resolvedAmount)) {
+                markProcessed(fingerprint, smsTimestamp, prefs)
+                return Result.success()
+            }
+            if (!isPlausibleTransactionDate(txDate)) {
+                markProcessed(fingerprint, smsTimestamp, prefs)
+                return Result.success()
+            }
+
+            val resolvedDirection = aiParsed?.type ?: local.direction
+            val txType = if (resolvedDirection == "credit" || resolvedDirection == "income") "income" else "expense"
+
+            val resolvedAccountId = aiParsed?.accountId ?: local.matchedAccountId
+                ?: (accounts.firstOrNull()?.get("id") as? String)
+            val resolvedPaymentModeId = aiParsed?.paymentModeId ?: local.matchedPaymentModeId
+            val modeType = paymentModes.firstOrNull { it["id"] == resolvedPaymentModeId }?.get("type") as? String
+            val affectsBalance = modeType != "creditCard" && modeType != "cash"
 
             val categories = fetchCategories(db, uid)
-            val categoryId = resolveOrCreateCategory(parsed.categorySlug, categories, uid, db)
+            val categoryId = resolveOrCreateCategory(aiParsed?.categorySlug, categories, uid, db)
 
-            val resolvedAccountId = parsed.accountId
-                ?: (accounts.firstOrNull()?.get("id") as? String)
+            val title = aiParsed?.title ?: local.merchantCandidate ?: "Transaction"
+            val txnCategory = local.txnCategoryHint ?: txType
+            val processingStatus = when {
+                local.isHighConfidence -> "confirmed"
+                aiParsed != null -> "aiProcessed"
+                else -> "needsAiReview"
+            }
 
             val txMap = buildMap {
                 put("userId", uid)
-                put("title", parsed.title)
-                put("amount", parsed.amount)
-                put("type", parsed.type)
-                put("date", Timestamp(Date(smsTimestamp)))
+                put("title", title)
+                put("amount", resolvedAmount)
+                put("type", txType)
+                put("date", Timestamp(txDate))
                 put("categoryId", categoryId)
                 put("accountId", resolvedAccountId ?: "")
-                put("paymentModeId", parsed.paymentModeId)
+                put("paymentModeId", resolvedPaymentModeId)
                 put("source", "sms")
                 put("rawSms", smsBody)
                 put("createdAt", Timestamp(Date()))
                 put("affectsBalance", affectsBalance)
+                put("txnCategory", txnCategory)
+                put("paymentMethod", local.paymentMethod)
+                put("sourceMessageId", fingerprint)
+                put("sourceMessageHash", sourceMessageHash)
+                put("externalTransactionId", local.referenceNumber)
+                put("transactionAt", Timestamp(txDate))
+                put("processingStatus", processingStatus)
+                put("aiConfidence", aiParsed?.confidence)
+                put("aiModel", if (aiParsed != null) "claude-haiku-4-5-20251001" else null)
             }
 
             // Mark processed before writing so a concurrent isolate doesn't duplicate.
             markProcessed(fingerprint, smsTimestamp, prefs)
 
-            val txRef = db.collection("users").document(uid)
-                .collection("transactions").add(txMap).await()
-
-            if (resolvedAccountId != null && affectsBalance) {
-                val delta = if (parsed.type == "income") parsed.amount else -parsed.amount
-                db.collection("users").document(uid)
-                    .collection("accounts").document(resolvedAccountId)
-                    .update("balance", FieldValue.increment(delta)).await()
-            }
+            val txRef = db.collection("users").document(uid).collection("transactions").document()
+            db.runTransaction { transaction ->
+                transaction.set(txRef, txMap)
+                if (resolvedAccountId != null && affectsBalance) {
+                    val delta = if (txType == "income") resolvedAmount else -resolvedAmount
+                    transaction.update(
+                        db.collection("users").document(uid)
+                            .collection("accounts").document(resolvedAccountId),
+                        "balance", FieldValue.increment(delta),
+                    )
+                }
+            }.await()
 
             if (notificationsEnabled) {
                 val currency = accounts.firstOrNull()?.get("currency") as? String ?: "INR"
                 val symbol = currencySymbol(currency)
-                val notifTitle = "$symbol${formatAmount(parsed.amount)} added · ${parsed.title}"
+                val reviewSuffix = if (processingStatus == "needsAiReview") " · Needs review" else ""
+                val notifTitle = "$symbol${formatAmount(resolvedAmount)} added · $title"
                 showNotification(
                     id = (System.currentTimeMillis() / 1000).toInt(),
                     title = notifTitle,
-                    body = "Auto-detected · Tap to review in Ledger",
+                    body = "Auto-detected$reviewSuffix · Tap to review in Ledger",
                     transactionId = txRef.id,
                 )
             }
 
         } catch (_: Exception) {
-            // Don't retry — processMissedSms will catch any miss when the app next opens.
+            // Don't retry — the foreground Dart listener or the user reopening
+            // the app will pick up subsequent SMS normally. A transient
+            // failure here does not retroactively lose data since nothing
+            // was written until the point of failure.
         }
 
         return Result.success()
@@ -166,13 +240,41 @@ class SmsProcessingWorker(
                 .mapNotNull { doc -> doc.data?.toMutableMap()?.also { it["id"] = doc.id } }
         }
 
+    private suspend fun transactionExistsByExternalRef(
+        db: FirebaseFirestore,
+        uid: String,
+        externalTransactionId: String,
+    ): Boolean = withContext(Dispatchers.IO) {
+        db.collection("users").document(uid).collection("transactions")
+            .whereEqualTo("externalTransactionId", externalTransactionId)
+            .limit(1).get().await().documents.isNotEmpty()
+    }
+
+    private suspend fun transactionExistsByHashNearby(
+        db: FirebaseFirestore,
+        uid: String,
+        sourceMessageHash: String,
+        near: Date,
+        windowMillis: Long = 2 * 60 * 1000L,
+    ): Boolean = withContext(Dispatchers.IO) {
+        db.collection("users").document(uid).collection("transactions")
+            .whereEqualTo("sourceMessageHash", sourceMessageHash)
+            .whereGreaterThanOrEqualTo("date", Timestamp(Date(near.time - windowMillis)))
+            .whereLessThanOrEqualTo("date", Timestamp(Date(near.time + windowMillis)))
+            .limit(1).get().await().documents.isNotEmpty()
+    }
+
+    // Category slug is null on the local-only (high-confidence) path, since
+    // the local parser does not attempt semantic categorization — that
+    // genuinely needs the AI path. Falls back to "Other" rather than
+    // guessing, same as the Dart pipeline.
     private suspend fun resolveOrCreateCategory(
-        slug: String,
+        slug: String?,
         categories: List<Map<String, Any?>>,
         uid: String,
         db: FirebaseFirestore,
     ): String {
-        val lower = slug.lowercase()
+        val lower = (slug ?: "other").lowercase()
         val existing = categories.firstOrNull {
             (it["title"] as? String)?.lowercase()?.contains(lower) == true
         }
@@ -220,6 +322,7 @@ class SmsProcessingWorker(
         val accountId: String?,
         val paymentModeId: String?,
         val categorySlug: String,
+        val confidence: Double,
     )
 
     private suspend fun callClaudeApi(
@@ -292,7 +395,8 @@ Return JSON:
                 .getJSONArray("content").getJSONObject(0).getString("text")
             val parsed = JSONObject(stripMarkdown(content))
 
-            if (parsed.optDouble("confidence", 0.0) < CONFIDENCE_THRESHOLD) return@withContext null
+            val confidence = parsed.optDouble("confidence", 0.0)
+            if (confidence < CONFIDENCE_THRESHOLD) return@withContext null
 
             val accountId = parsed.optString("accountId").takeIf { it.isNotEmpty() && it != "null" }
             val paymentModeId = parsed.optString("paymentModeId").takeIf { it.isNotEmpty() && it != "null" }
@@ -304,6 +408,7 @@ Return JSON:
                 accountId = accountId,
                 paymentModeId = paymentModeId,
                 categorySlug = parsed.optString("suggestedCategorySlug", "other"),
+                confidence = confidence,
             )
         } catch (_: Exception) {
             null
@@ -315,6 +420,19 @@ Return JSON:
         return Regex("""^```(?:json)?\s*([\s\S]*?)```$""").find(trimmed)
             ?.groupValues?.get(1)?.trim() ?: trimmed
     }
+
+    // ── Local parsing helpers ─────────────────────────────────────────────────
+
+    private fun computeSmsHash(body: String): String {
+        val normalized = body.lowercase().replace(Regex("""\s+"""), " ").trim()
+        val digest = MessageDigest.getInstance("SHA-256").digest(normalized.toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun isPlausibleAmount(amount: Double): Boolean = amount > 0 && amount <= 10_000_000
+
+    private fun isPlausibleTransactionDate(date: Date): Boolean =
+        date.time <= System.currentTimeMillis() + 24 * 60 * 60 * 1000L
 
     // ── Deduplication ─────────────────────────────────────────────────────────
 

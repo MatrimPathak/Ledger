@@ -32,7 +32,7 @@ class SmsReceiver : BroadcastReceiver() {
         val sender = messages.first().originatingAddress ?: ""
         val timestamp = messages.first().timestampMillis
 
-        if (!looksLikeBankSms(body)) return
+        if (!looksLikeBankSms(context, body)) return
 
         val prefs = context.getSharedPreferences(FLUTTER_PREFS, Context.MODE_PRIVATE)
         if (!prefs.getBoolean("$KEY_PREFIX$KEY_AUTO_DETECT", false)) return
@@ -60,16 +60,21 @@ class SmsReceiver : BroadcastReceiver() {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private fun looksLikeBankSms(body: String): Boolean {
+    // Coarse Layer-1 prefilter, keywords sourced from the same
+    // assets/sms_patterns/bank_patterns.json the local deterministic parser
+    // uses (via LocalSmsParser's cached rules) — one keyword list, not a
+    // second hand-copied one drifting from the Dart/JSON version.
+    private fun looksLikeBankSms(context: Context, body: String): Boolean {
         val lower = body.lowercase()
-        val keywords = listOf(
-            "debited", "credited", "debit", "credit", "inr", "upi ref", "neft",
-            "imps", "rtgs", "a/c", "acct", "transaction", "rs.", "rs ", "balance",
-            "bank", "e-mandate", "emandate", "will be deducted", "auto debit", "auto-debit",
-        )
-        if (keywords.any { lower.contains(it) }) return true
-        val patterns = listOf(Regex("""\bnach\b"""), Regex("""\bumn\b"""), Regex("""\bmandate\b"""))
-        return patterns.any { it.containsMatchIn(lower) }
+        val rules = RulesCache.get(context)
+        val keywords = rules.optJSONArray("globalKeywords")
+        val keywordsMatch = keywords != null &&
+            (0 until keywords.length()).any { lower.contains(keywords.getString(it)) }
+        if (keywordsMatch) return true
+        val wordBoundaryKeywords = rules.optJSONArray("globalWordBoundaryKeywords")
+        return wordBoundaryKeywords != null && (0 until wordBoundaryKeywords.length()).any {
+            Regex("""\b${Regex.escape(wordBoundaryKeywords.getString(it))}\b""").containsMatchIn(lower)
+        }
     }
 
     private fun isAppInForeground(context: Context): Boolean {

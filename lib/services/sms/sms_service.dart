@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:another_telephony/telephony.dart';
 import 'package:collection/collection.dart';
+import 'package:crypto/crypto.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -14,6 +15,9 @@ import '../../models/category.dart';
 import '../../models/transaction.dart' as tx_model;
 import '../../models/payment_mode.dart';
 import 'bank_sms_filter.dart';
+import 'local_sms_parser.dart';
+
+const double _maxPlausibleAmount = 10000000;
 
 String? resolveBackgroundSmsUid({
   required String? firebaseAuthUid,
@@ -41,6 +45,15 @@ String _smsFingerprint(SmsMessage msg) {
   final body = msg.body ?? '';
   final snippet = body.length > 50 ? body.substring(0, 50) : body;
   return '${addr}_${msg.date ?? 0}_$snippet';
+}
+
+/// Content-based dedup hash, independent of device-local fingerprint state
+/// (survives app-data clears/reinstalls). Normalizes whitespace/case before
+/// hashing so trivial formatting differences between resends of the same
+/// bank event still hash identically.
+String computeSmsHash(String body) {
+  final normalized = body.toLowerCase().replaceAll(RegExp(r'\s+'), ' ').trim();
+  return sha256.convert(utf8.encode(normalized)).toString();
 }
 
 bool _isAlreadyProcessed(String fingerprint, SharedPreferences prefs) {
@@ -81,15 +94,25 @@ bool _isPreDebitNotification(String body) {
       lower.contains('auto-debit');
 }
 
-// Looks up a category by slug. If none matches, creates one from the default
-// category definitions so the user never sees an "Other" fallback silently.
-Future<Category> _resolveOrCreateCategory({
-  required String slug,
+/// Rejects values that cannot be a real transaction, so a parsing glitch
+/// (local or AI) can never silently create incorrect financial data.
+bool isPlausibleAmount(double amount) =>
+    amount > 0 && amount <= _maxPlausibleAmount;
+
+bool isPlausibleTransactionDate(DateTime date) =>
+    date.isBefore(DateTime.now().add(const Duration(days: 1)));
+
+// Looks up a category by slug. If none matches (or no slug is available,
+// e.g. a purely local high-confidence parse with no AI categorization),
+// falls back to "Other" rather than guessing — the user can always correct
+// it, and an honest "Other" is safer than a fabricated category.
+Future<Category> resolveOrCreateCategory({
+  required String? slug,
   required List<Category> categories,
   required String uid,
   required FirestoreService firestoreService,
 }) async {
-  final lower = slug.toLowerCase();
+  final lower = (slug ?? 'other').toLowerCase();
   final existing =
       categories.where((c) => c.title.toLowerCase().contains(lower)).firstOrNull;
   if (existing != null) return existing;
@@ -114,7 +137,7 @@ Future<Category> _resolveOrCreateCategory({
 @pragma('vm:entry-point')
 Future<void> backgroundSmsHandler(SmsMessage message) async {
   final body = message.body ?? '';
-  if (!BankSmsFilter.looksLikeBankSms(body)) return;
+  if (!await BankSmsFilter.looksLikeBankSms(body)) return;
 
   final prefs = await SharedPreferences.getInstance();
   if (prefs.getBool(AppConstants.prefKeyAutoDetect) != true) return;
@@ -165,64 +188,140 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     final accounts = await firestoreService.fetchAccounts(uid);
     final paymentModes = await firestoreService.fetchPaymentModes(uid);
 
-    final apiKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ??
-        AppConstants.claudeApiKeyPlaceholder;
-    if (apiKey == AppConstants.claudeApiKeyPlaceholder || apiKey.isEmpty) {
-      await NotificationService.showSmsErrorNotification('Add your Claude API key in Settings to auto-detect transactions.');
+    final txDate = smsTimestamp != null
+        ? DateTime.fromMillisecondsSinceEpoch(smsTimestamp)
+        : DateTime.now();
+    final sourceMessageHash = computeSmsHash(body);
+
+    // Layer 2/3: deterministic local parsing + confidence scoring.
+    final parser = await LocalSmsParser.load();
+    final localResult = parser.parse(body, accounts: accounts, paymentModes: paymentModes);
+
+    // Firestore-side dedup, on top of the device-local fingerprint above —
+    // catches the case where app data was cleared/reinstalled and the
+    // fingerprint list was lost, but the transaction already exists.
+    if (localResult.referenceNumber != null) {
+      final exists = await firestoreService.transactionExistsByExternalRef(
+          uid, localResult.referenceNumber!);
+      if (exists) {
+        await _markProcessed(fingerprint, prefs);
+        return;
+      }
+    } else {
+      final exists = await firestoreService.transactionExistsByHashNearby(
+          uid, sourceMessageHash, txDate);
+      if (exists) {
+        await _markProcessed(fingerprint, prefs);
+        return;
+      }
+    }
+
+    // Layer 4: three-tier routing. High confidence never touches the cloud.
+    // Medium/low confidence still fall back to today's full-SMS AI call —
+    // splitting that into a minimized partial request for the medium tier
+    // is a further optimization, not required for this local-first
+    // rewrite's correctness.
+    ClaudeParsedResult? aiParsed;
+    if (!localResult.isHighConfidence) {
+      final apiKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ??
+          AppConstants.claudeApiKeyPlaceholder;
+      if (apiKey != AppConstants.claudeApiKeyPlaceholder && apiKey.isNotEmpty) {
+        final claudeService = ClaudeService(apiKey);
+        final parsed = await claudeService.parseSmsTransaction(
+          smsBody: body,
+          accounts: accounts,
+          paymentModes: paymentModes,
+        );
+        if (parsed != null) {
+          aiParsed = ClaudeParsedResult(parsed);
+        }
+      }
+    }
+
+    final resolvedAmount = aiParsed?.parsed.amount ?? localResult.amount;
+    if (resolvedAmount == null || !isPlausibleAmount(resolvedAmount)) {
+      // Nothing usable was extracted either locally or via AI — there is no
+      // transaction to record. This mirrors the previous "silently skip"
+      // behavior for genuinely unparseable content, which is correct: an
+      // absent amount is not a financial event, not a transaction to lose.
+      await _markProcessed(fingerprint, prefs);
+      if (aiParsed == null && !localResult.isHighConfidence) {
+        await NotificationService.showSmsErrorNotification(
+            'Could not parse transaction from SMS.');
+      }
+      return;
+    }
+    if (!isPlausibleTransactionDate(txDate)) {
+      await _markProcessed(fingerprint, prefs);
+      await NotificationService.showSmsErrorNotification(
+          'SMS auto-detect error: transaction date is invalid.');
       return;
     }
 
-    final claudeService = ClaudeService(apiKey);
-    final parsed = await claudeService.parseSmsTransaction(
-      smsBody: body,
-      accounts: accounts,
-      paymentModes: paymentModes,
-    );
+    final resolvedDirection = aiParsed?.parsed.type ?? localResult.direction;
+    final txType = resolvedDirection == 'credit' || resolvedDirection == 'income'
+        ? tx_model.TransactionType.income
+        : tx_model.TransactionType.expense;
 
-    if (parsed == null) {
-      await NotificationService.showSmsErrorNotification('Could not parse transaction from SMS (low confidence).');
-      return;
-    }
+    final resolvedAccountId = aiParsed?.parsed.accountId ??
+        localResult.matchedAccountId ??
+        (accounts.isNotEmpty ? accounts.first.id : null);
+    final resolvedPaymentModeId =
+        aiParsed?.parsed.paymentModeId ?? localResult.matchedPaymentModeId;
+
+    final resolvedMode = resolvedPaymentModeId != null
+        ? paymentModes.where((m) => m.id == resolvedPaymentModeId).firstOrNull
+        : null;
+    final affectsBalance = resolvedMode?.type.affectsAccountBalance ?? true;
 
     final categories = await firestoreService.watchCategories(uid).first;
-    final slug = parsed.suggestedCategorySlug ?? 'other';
-    final category = await _resolveOrCreateCategory(
+    final slug = aiParsed?.parsed.suggestedCategorySlug;
+    final category = await resolveOrCreateCategory(
       slug: slug,
       categories: categories,
       uid: uid,
       firestoreService: firestoreService,
     );
 
-    final txType = parsed.type == 'income'
-        ? tx_model.TransactionType.income
-        : tx_model.TransactionType.expense;
+    final title = aiParsed?.parsed.title ??
+        localResult.merchantCandidate ??
+        'Transaction';
 
-    final txDate = smsTimestamp != null
-        ? DateTime.fromMillisecondsSinceEpoch(smsTimestamp)
-        : DateTime.now();
+    // Offline-first: this transaction is created regardless of whether AI
+    // ran/succeeded. processingStatus records how it got here so the UI can
+    // surface a review prompt for anything not locally high-confidence —
+    // never a silent drop, unlike the pre-refactor "return null" path.
+    final processingStatus = localResult.isHighConfidence
+        ? tx_model.TxnProcessingStatus.confirmed
+        : (aiParsed != null
+            ? tx_model.TxnProcessingStatus.aiProcessed
+            : tx_model.TxnProcessingStatus.needsAiReview);
+
     final now = DateTime.now();
-    final resolvedAccountId =
-        parsed.accountId ?? (accounts.isNotEmpty ? accounts.first.id : null);
-
-    final resolvedMode = parsed.paymentModeId != null
-        ? paymentModes.where((m) => m.id == parsed.paymentModeId).firstOrNull
-        : null;
-    final affectsBalance = resolvedMode?.type.affectsAccountBalance ?? true;
-
     final transaction = tx_model.Transaction(
       id: '',
       userId: uid,
-      title: parsed.title,
-      amount: parsed.amount,
+      title: title,
+      amount: resolvedAmount,
       type: txType,
       date: txDate,
       categoryId: category.id,
       accountId: resolvedAccountId ?? '',
-      paymentModeId: parsed.paymentModeId,
+      paymentModeId: resolvedPaymentModeId,
       source: tx_model.TransactionSource.sms,
       rawSms: body,
       createdAt: now,
       affectsBalance: affectsBalance,
+      merchantConfidence: localResult.isHighConfidence ? localResult.confidence : null,
+      txnCategory: _resolveTxnCategory(localResult.txnCategoryHint, txType),
+      paymentMethod: tx_model.TxnPaymentMethodExt.fromString(localResult.paymentMethod),
+      sourceMessageId: fingerprint,
+      sourceMessageHash: sourceMessageHash,
+      externalTransactionId: localResult.referenceNumber,
+      transactionAt: txDate,
+      processingStatus: processingStatus,
+      aiConfidence: aiParsed?.parsed.confidence,
+      aiModel: aiParsed != null ? AppConstants.claudeSmsFastModel : null,
     );
 
     // Mark processed before writing to Firestore so a concurrent isolate
@@ -235,25 +334,45 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       }
     }
 
-    final saved = await firestoreService.createTransaction(transaction);
-
+    final adjustments = <BalanceAdjustment>[];
     if (resolvedAccountId != null && affectsBalance) {
       final delta = txType == tx_model.TransactionType.income
-          ? parsed.amount
-          : -parsed.amount;
-      await firestoreService.updateAccountBalance(uid, resolvedAccountId, delta);
+          ? resolvedAmount
+          : -resolvedAmount;
+      adjustments.add(BalanceAdjustment(accountId: resolvedAccountId, delta: delta));
     }
+    final saved = await firestoreService.createTransactionWithBalanceUpdate(
+      transaction,
+      balanceAdjustments: adjustments,
+    );
 
     final currency = accounts.isNotEmpty ? accounts.first.currency : 'INR';
+    final reviewSuffix =
+        processingStatus == tx_model.TxnProcessingStatus.needsAiReview
+            ? ' · Needs review'
+            : '';
     await NotificationService.showTransactionDetectedNotification(
       id: now.millisecondsSinceEpoch ~/ 1000,
-      title: NotificationService.buildNotificationTitle(parsed.title, parsed.amount, currency),
-      body: 'Auto-detected · Tap to review in Ledger',
+      title: NotificationService.buildNotificationTitle(title, resolvedAmount, currency),
+      body: 'Auto-detected$reviewSuffix · Tap to review in Ledger',
       transactionId: saved.id,
     );
   } catch (e) {
     await NotificationService.showSmsErrorNotification('SMS auto-detect error: $e');
   }
+}
+
+tx_model.TxnCategory _resolveTxnCategory(
+    String? txnCategoryHint, tx_model.TransactionType type) {
+  final hinted = tx_model.TxnCategoryExt.fromString(txnCategoryHint);
+  return hinted ?? tx_model.TxnCategoryExt.fromLegacyType(type);
+}
+
+/// Thin wrapper so `aiParsed?.parsed` reads clearly at call sites without
+/// repeating null-checks on the underlying [ParsedSmsTransaction].
+class ClaudeParsedResult {
+  ClaudeParsedResult(this.parsed);
+  final ParsedSmsTransaction parsed;
 }
 
 class SmsService {

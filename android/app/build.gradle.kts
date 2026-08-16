@@ -60,4 +60,13 @@ dependencies {
 
     // Provides kotlinx.coroutines.tasks.await() for Firebase Task<T> suspension.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
+
+    // JVM unit tests (android/app/src/test) for pure-Kotlin classes like
+    // LocalSmsParser that don't touch the Android framework. org.json is
+    // part of the Android platform at runtime (its real implementation is
+    // provided by the OS, not this artifact) — the standalone "org.json:json"
+    // artifact is API-compatible and needed so JSONObject/JSONArray actually
+    // work under a plain JVM test runner instead of throwing "not mocked".
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

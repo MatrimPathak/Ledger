@@ -271,6 +271,43 @@ class FirestoreService {
     });
   }
 
+  /// Firestore-side dedup check layered on top of the device-local
+  /// fingerprint list: true when a transaction with this bank/UPI reference
+  /// number already exists for this user. The strongest dedup signal when
+  /// present, since it's independent of device state (survives app-data
+  /// clears/reinstalls that would otherwise defeat the SharedPreferences
+  /// fingerprint fast-path).
+  Future<bool> transactionExistsByExternalRef(
+      String uid, String externalTransactionId) async {
+    final snap = await _transactions(uid)
+        .where('externalTransactionId', isEqualTo: externalTransactionId)
+        .limit(1)
+        .get();
+    return snap.docs.isNotEmpty;
+  }
+
+  /// Fallback dedup check when no reference number was extracted: true when
+  /// a transaction with the same normalized-SMS-body hash already exists
+  /// within [window] of [near] (the SMS's own timestamp). Scoped to a time
+  /// window rather than an unbounded hash lookup since the same merchant
+  /// SMS wording can legitimately recur across unrelated transactions.
+  Future<bool> transactionExistsByHashNearby(
+    String uid,
+    String sourceMessageHash,
+    DateTime near, {
+    Duration window = const Duration(minutes: 2),
+  }) async {
+    final snap = await _transactions(uid)
+        .where('sourceMessageHash', isEqualTo: sourceMessageHash)
+        .where('date',
+            isGreaterThanOrEqualTo: Timestamp.fromDate(near.subtract(window)))
+        .where('date',
+            isLessThanOrEqualTo: Timestamp.fromDate(near.add(window)))
+        .limit(1)
+        .get();
+    return snap.docs.isNotEmpty;
+  }
+
   Future<List<app_model.Transaction>> fetchTransactionsForAnalytics(
       String uid, int days) async {
     final from = DateTime.now().subtract(Duration(days: days));
