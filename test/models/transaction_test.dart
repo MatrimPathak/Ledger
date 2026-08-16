@@ -66,5 +66,67 @@ void main() {
       expect((data['date'] as Timestamp).toDate(), DateTime(2024, 3, 31, 9, 30));
       expect((data['createdAt'] as Timestamp).toDate(), DateTime(2024, 3, 31, 9));
     });
+
+    test('preserves the existing id when no replacement is provided', () {
+      final original = _smsTransaction();
+
+      final copy = original.copyWith(title: 'Updated merchant');
+
+      expect(copy.id, original.id);
+      expect(copy.title, 'Updated merchant');
+    });
+
+    test('replaces id while preserving SMS transaction metadata', () {
+      final original = _smsTransaction();
+
+      final copy = original.copyWith(id: 'firestore-doc-id');
+
+      expect(copy.id, 'firestore-doc-id');
+      expect(copy.userId, original.userId);
+      expect(copy.title, original.title);
+      expect(copy.amount, original.amount);
+      expect(copy.type, original.type);
+      expect(copy.date, original.date);
+      expect(copy.categoryId, original.categoryId);
+      expect(copy.accountId, original.accountId);
+      expect(copy.paymentModeId, original.paymentModeId);
+      expect(copy.notes, original.notes);
+      expect(copy.source, app_model.TransactionSource.sms);
+      expect(copy.rawSms, original.rawSms);
+      expect(copy.createdAt, original.createdAt);
+    });
+
+    test('can clear nullable fields without dropping the id', () {
+      final original = _smsTransaction();
+
+      final copy = original.copyWith(
+        clearPaymentModeId: true,
+        clearNotes: true,
+      );
+
+      expect(copy.id, original.id);
+      expect(copy.paymentModeId, isNull);
+      expect(copy.notes, isNull);
+    });
   });
+}
+
+app_model.Transaction _smsTransaction() {
+  final now = DateTime.utc(2026, 5, 27, 7);
+
+  return app_model.Transaction(
+    id: 'local-draft-id',
+    userId: 'user-1',
+    title: 'Coffee Shop',
+    amount: 125.50,
+    type: app_model.TransactionType.expense,
+    date: now,
+    categoryId: 'food',
+    accountId: 'checking',
+    paymentModeId: 'card',
+    notes: 'morning coffee',
+    source: app_model.TransactionSource.sms,
+    rawSms: 'Spent INR 125.50 at Coffee Shop',
+    createdAt: now,
+  );
 }

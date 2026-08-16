@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -30,7 +31,7 @@ final analyticsInsightsProvider =
   }
 
   // Aggregate transaction data to minimize Claude API tokens
-  final summary = _buildSummary(transactions);
+  final summary = buildAnalyticsSummary(transactions);
   final currency = accounts.isNotEmpty ? accounts.first.currency : 'INR';
 
   const storage = FlutterSecureStorage();
@@ -66,7 +67,9 @@ final analyticsInsightsProvider =
   return results;
 });
 
-List<Map<String, dynamic>> _buildSummary(List<app_model.Transaction> transactions) {
+@visibleForTesting
+List<Map<String, dynamic>> buildAnalyticsSummary(
+    List<app_model.Transaction> transactions) {
   double totalExpense = 0;
   double totalIncome = 0;
   final categoryTotals = <String, double>{};

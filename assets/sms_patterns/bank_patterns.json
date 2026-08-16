@@ -1,0 +1,33 @@
+{
+  "_comment": "Declarative bank-SMS pattern rules, shared verbatim by the Dart parser (lib/services/sms/local_sms_parser.dart) and the Kotlin parser (android/app/src/main/kotlin/.../LocalSmsParser.kt) so both interpreters extract identical fields from identical input. Populated in full as part of the local deterministic SMS parser work; this skeleton only carries the coarse prefilter keywords migrated from BankSmsFilter so both languages can agree on the prefilter without duplicating the list by hand.",
+  "version": 1,
+  "globalKeywords": [
+    "debited",
+    "credited",
+    "debit",
+    "credit",
+    "inr",
+    "upi ref",
+    "neft",
+    "imps",
+    "rtgs",
+    "a/c",
+    "acct",
+    "transaction",
+    "rs.",
+    "rs ",
+    "balance",
+    "bank",
+    "e-mandate",
+    "emandate",
+    "will be deducted",
+    "auto debit",
+    "auto-debit"
+  ],
+  "globalWordBoundaryKeywords": [
+    "nach",
+    "umn",
+    "mandate"
+  ],
+  "rules": []
+}

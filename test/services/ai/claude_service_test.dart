@@ -70,7 +70,7 @@ void main() {
             'title': 'Unknown merchant',
             'amount': 500,
             'type': 'expense',
-            'confidence': 0.69,
+            'confidence': 0.39,
           }),
           200,
         );
@@ -157,6 +157,83 @@ void main() {
       expect(insights, hasLength(1));
       expect(insights.single.title, 'Add your Claude API key');
       expect(insights.single.type, 'tip');
+    });
+  });
+
+  group('ClaudeService.generateInsightsOrThrow', () {
+    test('uses the supported analytics model and parses fenced JSON arrays',
+        () async {
+      late Map<String, dynamic> requestBody;
+      final service = ClaudeService(
+        'test-api-key',
+        client: MockClient((request) async {
+          requestBody = jsonDecode(request.body) as Map<String, dynamic>;
+          return http.Response(
+            jsonEncode({
+              'content': [
+                {
+                  'text': '''
+```json
+[
+  {
+    "title": "Food Spike",
+    "body": "Food spending rose this month.",
+    "type": "warning"
+  }
+]
+```
+'''
+                },
+              ],
+            }),
+            200,
+          );
+        }),
+      );
+
+      final insights = await service.generateInsightsOrThrow(
+        transactionSummary: const [
+          {'category': 'food', 'amount': 1200},
+        ],
+        currency: 'INR',
+      );
+
+      expect(requestBody['model'], AppConstants.claudeAnalyticsModel);
+      expect(insights, hasLength(1));
+      expect(insights.single.title, 'Food Spike');
+      expect(insights.single.body, 'Food spending rose this month.');
+      expect(insights.single.type, 'warning');
+    });
+
+    test('surfaces Claude API error messages from non-200 responses',
+        () async {
+      final service = ClaudeService(
+        'test-api-key',
+        client: MockClient((request) async {
+          return http.Response(
+            jsonEncode({
+              'error': {
+                'message': 'model claude-sonnet-4-6 was not found',
+              },
+            }),
+            400,
+          );
+        }),
+      );
+
+      expect(
+        () => service.generateInsightsOrThrow(
+          transactionSummary: const [],
+          currency: 'INR',
+        ),
+        throwsA(
+          isA<Exception>().having(
+            (error) => error.toString(),
+            'message',
+            contains('model claude-sonnet-4-6 was not found'),
+          ),
+        ),
+      );
     });
   });
 }

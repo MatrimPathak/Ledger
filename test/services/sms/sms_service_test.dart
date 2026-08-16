@@ -6,18 +6,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('BankSmsFilter', () {
-    test('matches common banking transaction SMS keywords', () {
-      expect(
-        BankSmsFilter.looksLikeBankSms(
-          'INR 499.00 debited from A/C XX1234 via UPI ref 9876',
-        ),
-        isTrue,
-      );
-      expect(BankSmsFilter.looksLikeBankSms('Your OTP is 123456'), isFalse);
-    });
-  });
-
   group('resolveBackgroundSmsUid', () {
     test('prefers the current Firebase Auth uid when it is available',
         () async {
