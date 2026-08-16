@@ -217,21 +217,33 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     }
 
     // Layer 4: three-tier routing. High confidence never touches the cloud.
-    // Medium/low confidence still fall back to today's full-SMS AI call —
-    // splitting that into a minimized partial request for the medium tier
-    // is a further optimization, not required for this local-first
-    // rewrite's correctness.
+    // Medium confidence sends only a redacted snippet plus whatever the
+    // local parser is still unsure about; low confidence (local extraction
+    // found too little to build a smaller request from) falls back to the
+    // full SMS, same shape as before this rewrite.
     ClaudeParsedResult? aiParsed;
     if (!localResult.isHighConfidence) {
       final apiKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ??
           AppConstants.claudeApiKeyPlaceholder;
       if (apiKey != AppConstants.claudeApiKeyPlaceholder && apiKey.isNotEmpty) {
         final claudeService = ClaudeService(apiKey);
-        final parsed = await claudeService.parseSmsTransaction(
-          smsBody: body,
-          accounts: accounts,
-          paymentModes: paymentModes,
-        );
+        final parsed = localResult.isMediumConfidence
+            ? await claudeService.parseSmsPartial(
+                redactedSmsSnippet: redactSensitiveDigits(body),
+                accounts: accounts,
+                paymentModes: paymentModes,
+                knownAmount: localResult.amount,
+                knownDirection: localResult.direction,
+                knownPaymentMethod: localResult.paymentMethod,
+                knownReferenceNumber: localResult.referenceNumber,
+                cacheKey: sourceMessageHash,
+              )
+            : await claudeService.parseSmsTransaction(
+                smsBody: body,
+                accounts: accounts,
+                paymentModes: paymentModes,
+                cacheKey: sourceMessageHash,
+              );
         if (parsed != null) {
           aiParsed = ClaudeParsedResult(parsed);
         }

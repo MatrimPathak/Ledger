@@ -51,6 +51,10 @@ dependencies {
     implementation("androidx.multidex:multidex:2.0.1")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
+    // Android-Keystore-backed encrypted storage for the Claude API key/uid
+    // mirror the background SMS worker reads (see SecurePrefsStore.kt).
+    implementation("androidx.security:security-crypto:1.1.0")
+
     // Firebase deps are declared 'implementation' in the Flutter plugins so they
     // are not transitively visible to the app module. Declare them here explicitly
     // so SmsProcessingWorker can compile against the Firestore and Firebase APIs.

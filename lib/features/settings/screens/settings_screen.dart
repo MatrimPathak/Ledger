@@ -4,13 +4,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/battery_opt_provider.dart';
 import '../../../providers/firestore_provider.dart';
 import '../../../providers/settings_provider.dart';
+import '../../../services/secure/secure_prefs_bridge.dart';
 import '../../../services/sms/sms_service.dart';
 import '../../../services/battery_optimization_service.dart';
 
@@ -254,9 +254,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     ctrl.dispose();
     if (result == null) return;
     await storage.write(key: AppConstants.prefKeyClaudeApiKey, value: result);
-    // Mirror to SharedPreferences so the background SMS isolate can read it.
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(AppConstants.prefKeyClaudeApiKey, result);
+    // Mirror to the Keystore-backed native store so the background SMS
+    // worker can read it without ever touching plaintext SharedPreferences.
+    await SecurePrefsBridge.write(AppConstants.prefKeyClaudeApiKey, result);
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('API key saved')),

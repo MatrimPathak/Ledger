@@ -7,8 +7,10 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'app.dart';
 import 'core/constants/app_constants.dart';
+import 'core/utils/api_key_seed.dart';
 import 'firebase_options.dart';
 import 'services/notification/notification_service.dart';
+import 'services/secure/secure_prefs_bridge.dart';
 import 'services/sms/sms_service.dart';
 
 void main() async {
@@ -24,27 +26,40 @@ void main() async {
 
   final prefs = await SharedPreferences.getInstance();
 
-  // Persist uid so the background SMS isolate can use it without relying
-  // on FirebaseAuth.instance.currentUser (which is null in a fresh isolate).
+  // Mirror uid into the Keystore-backed native store (not plaintext
+  // SharedPreferences) so the background SMS worker — no Flutter engine,
+  // can't call FirebaseAuth.instance.currentUser — can use it without ever
+  // touching an unencrypted copy on disk.
   final uid = FirebaseAuth.instance.currentUser?.uid;
   if (uid != null) {
-    await prefs.setString(AppConstants.prefKeyUid, uid);
+    await SecurePrefsBridge.write(AppConstants.prefKeyUid, uid);
   }
 
-  // Ensure SharedPreferences always has the best available API key so the
-  // background SMS isolate (which cannot read FlutterSecureStorage) can use it.
-  // Priority: existing SharedPreferences key → secure storage key → .env key.
-  final existingKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ?? '';
-  if (existingKey.isEmpty || existingKey == AppConstants.claudeApiKeyPlaceholder) {
-    const storage = FlutterSecureStorage();
-    final secureKey = await storage.read(key: AppConstants.prefKeyClaudeApiKey);
-    final isValidSecureKey = secureKey != null &&
-        secureKey.isNotEmpty &&
-        secureKey != AppConstants.claudeApiKeyPlaceholder;
-    final seedKey = isValidSecureKey
-        ? secureKey
-        : (dotenv.env['CLAUDE_API_KEY'] ?? AppConstants.claudeApiKeyPlaceholder);
-    await prefs.setString(AppConstants.prefKeyClaudeApiKey, seedKey);
+  // Resolve the best available API key (secure storage → .env) and mirror
+  // it the same way. flutter_secure_storage stays the source of truth for
+  // the foreground app; this write only feeds the background worker's
+  // otherwise-inaccessible read path. Passing the placeholder as the
+  // "existing shared key" always resolves fresh from secure storage/env,
+  // since there is no plaintext tier to short-circuit on anymore.
+  const storage = FlutterSecureStorage();
+  final secureKey = await storage.read(key: AppConstants.prefKeyClaudeApiKey);
+  final resolvedKey = resolveSharedApiKeySeed(
+        sharedPreferencesKey: AppConstants.claudeApiKeyPlaceholder,
+        secureStorageKey: secureKey,
+        environmentKey: dotenv.env['CLAUDE_API_KEY'],
+      ) ??
+      AppConstants.claudeApiKeyPlaceholder;
+  final isValidSecureKey = secureKey != null &&
+      secureKey.isNotEmpty &&
+      secureKey != AppConstants.claudeApiKeyPlaceholder;
+  if (resolvedKey != AppConstants.claudeApiKeyPlaceholder) {
+    if (!isValidSecureKey) {
+      // Seed secure storage from .env on first run so future launches read
+      // a stable value straight from it.
+      await storage.write(
+          key: AppConstants.prefKeyClaudeApiKey, value: resolvedKey);
+    }
+    await SecurePrefsBridge.write(AppConstants.prefKeyClaudeApiKey, resolvedKey);
   }
 
   if (prefs.getBool(AppConstants.prefKeyAutoDetect) == true) {

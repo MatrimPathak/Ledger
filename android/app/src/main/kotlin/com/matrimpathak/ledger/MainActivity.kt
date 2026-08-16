@@ -39,5 +39,24 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.matrimpathak.ledger/secure_prefs"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "write" -> {
+                    val key = call.argument<String>("key")
+                    val value = call.argument<String>("value")
+                    if (key != null && value != null) {
+                        SecurePrefsStore.write(applicationContext, key, value)
+                        result.success(null)
+                    } else {
+                        result.error("INVALID_ARGS", "key and value are required", null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
     }
 }

@@ -16,6 +16,7 @@ import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -64,7 +65,10 @@ class SmsProcessingWorker(
         val lastProcessed = prefs.getLong("${P}last_sms_timestamp", 0L)
         if (smsTimestamp <= lastProcessed) return Result.success()
 
-        val uid = prefs.getString("${P}uid", null)?.takeIf { it.isNotBlank() }
+        // uid and the Claude API key live in the Keystore-backed
+        // SecurePrefsStore, not plaintext SharedPreferences — see
+        // SecurePrefsStore.kt.
+        val uid = SecurePrefsStore.read(applicationContext, "uid")?.takeIf { it.isNotBlank() }
             ?: return Result.success()
         val notificationsEnabled = prefs.getBoolean("${P}notifications_enabled", true)
 
@@ -105,7 +109,7 @@ class SmsProcessingWorker(
             // Three-tier routing: high confidence never touches the cloud.
             var aiParsed: ParsedSms? = null
             if (!local.isHighConfidence) {
-                val apiKey = prefs.getString("${P}claude_api_key", null)
+                val apiKey = SecurePrefsStore.read(applicationContext, "claude_api_key")
                     ?.takeIf { it.isNotBlank() && it != "YOUR_CLAUDE_API_KEY" }
                 if (apiKey != null) {
                     aiParsed = callClaudeApi(apiKey, smsBody, accounts, paymentModes)
@@ -346,21 +350,9 @@ PaymentModes: [$modesJson]
 
 SMS: "$smsBody"
 
-Special cases:
-- E-Mandate / NACH / auto-debit notifications ("will be deducted", "E-Mandate!", "UMN"): treat as expense, extract the mandate description as title (e.g. "Amazon India" from "Amazon India mandate"), use "bills" as category.
-- Credit card bill payment: treat as expense, category "bills".
-- ATM withdrawal: treat as expense, category "other".
+$SPECIAL_CASES
 
-Return JSON:
-{
-  "title": "merchant or description (max 30 chars)",
-  "amount": number,
-  "type": "expense" or "income",
-  "accountId": "matching account id or null",
-  "paymentModeId": "matching payment mode id or null",
-  "suggestedCategorySlug": one of [food, transport, entertainment, shopping, bills, health, salary, investment, groceries, education, travel, transfer, other],
-  "confidence": float 0.0-1.0
-}""".trimIndent()
+$RESPONSE_SCHEMA""".trimIndent()
 
         val requestBody = JSONObject().apply {
             put("model", "claude-haiku-4-5-20251001")
@@ -374,23 +366,25 @@ Return JSON:
             })
         }.toString()
 
-        try {
-            val conn = URL("https://api.anthropic.com/v1/messages")
-                .openConnection() as HttpURLConnection
-            conn.apply {
-                requestMethod = "POST"
-                setRequestProperty("Content-Type", "application/json")
-                setRequestProperty("x-api-key", apiKey)
-                setRequestProperty("anthropic-version", "2023-06-01")
-                doOutput = true
-                connectTimeout = 15_000
-                readTimeout = 30_000
+        // Single retry with a short backoff, but only for network-level
+        // I/O failures — never for a non-200 HTTP response, which is a
+        // real answer from the API, not a transient failure retrying
+        // would fix.
+        val responseText = try {
+            sendClaudeRequest(requestBody, apiKey)
+        } catch (_: java.io.IOException) {
+            try {
+                delay(2_000)
+                sendClaudeRequest(requestBody, apiKey)
+            } catch (_: Exception) {
+                null
             }
-            conn.outputStream.use { it.write(requestBody.toByteArray(Charsets.UTF_8)) }
+        } catch (_: Exception) {
+            null
+        }
 
-            if (conn.responseCode != 200) return@withContext null
-
-            val text = conn.inputStream.bufferedReader().readText()
+        val text = responseText ?: return@withContext null
+        try {
             val content = JSONObject(text)
                 .getJSONArray("content").getJSONObject(0).getString("text")
             val parsed = JSONObject(stripMarkdown(content))
@@ -413,6 +407,25 @@ Return JSON:
         } catch (_: Exception) {
             null
         }
+    }
+
+    // Returns the raw response body on HTTP 200, or null on any other
+    // status code (a real, non-retryable answer from the API).
+    private fun sendClaudeRequest(requestBody: String, apiKey: String): String? {
+        val conn = URL("https://api.anthropic.com/v1/messages")
+            .openConnection() as HttpURLConnection
+        conn.apply {
+            requestMethod = "POST"
+            setRequestProperty("Content-Type", "application/json")
+            setRequestProperty("x-api-key", apiKey)
+            setRequestProperty("anthropic-version", "2023-06-01")
+            doOutput = true
+            connectTimeout = 15_000
+            readTimeout = 30_000
+        }
+        conn.outputStream.use { it.write(requestBody.toByteArray(Charsets.UTF_8)) }
+        if (conn.responseCode != 200) return null
+        return conn.inputStream.bufferedReader().readText()
     }
 
     private fun stripMarkdown(text: String): String {
@@ -544,5 +557,25 @@ Return JSON:
         private const val CHANNEL_NAME = "Auto-detected Transactions"
         private const val FOREGROUND_NOTIF_ID = 99
         private const val CONFIDENCE_THRESHOLD = 0.4
+
+        // Kept identical to lib/services/ai/claude_service.dart's prompt
+        // fragments of the same name — a credit card bill payment settles
+        // existing card debt, it is not new spending, so it must not be
+        // categorized as an expense/"bills".
+        private const val SPECIAL_CASES = """Special cases:
+- E-Mandate / NACH / auto-debit notifications ("will be deducted", "E-Mandate!", "UMN"): treat as expense, extract the mandate description as title (e.g. "Amazon India" from "Amazon India mandate"), use "bills" as category.
+- Credit card bill payment (a payment received/confirmed towards a credit card, not a purchase on it): this settles card debt from an existing balance — it is a transfer, not new spending. Use category "transfer".
+- ATM withdrawal: treat as expense, category "other"."""
+
+        private const val RESPONSE_SCHEMA = """Return JSON:
+{
+  "title": "merchant or description (max 30 chars)",
+  "amount": number,
+  "type": "expense" or "income",
+  "accountId": "matching account id or null",
+  "paymentModeId": "matching payment mode id or null",
+  "suggestedCategorySlug": one of [food, transport, entertainment, shopping, bills, health, salary, investment, groceries, education, travel, transfer, other],
+  "confidence": float 0.0-1.0
+}"""
     }
 }
