@@ -14,6 +14,7 @@ import '../../../providers/firestore_provider.dart';
 import '../../../providers/payment_modes_provider.dart';
 import '../../../providers/accounts_provider.dart';
 import '../../../providers/settings_provider.dart';
+import '../../../services/firebase/firestore_service.dart' show BalanceAdjustment;
 import '../../../services/notification/notification_service.dart';
 import '../../home/widgets/transaction_list_item.dart';
 
@@ -286,16 +287,21 @@ class _TransactionDetailBody extends ConsumerWidget {
 
     try {
       final firestoreService = ref.read(firestoreServiceProvider);
-      await firestoreService.deleteTransaction(user.uid, transaction.id);
 
       // Reverse the balance effect only if the transaction originally affected balance
+      final adjustments = <BalanceAdjustment>[];
       if (transaction.affectsBalance) {
         final reverseDelta = transaction.type == TransactionType.income
             ? -transaction.amount
             : transaction.amount;
-        await firestoreService.updateAccountBalance(
-            user.uid, transaction.accountId, reverseDelta);
+        adjustments.add(BalanceAdjustment(
+            accountId: transaction.accountId, delta: reverseDelta));
       }
+      await firestoreService.deleteTransactionWithBalanceUpdate(
+        user.uid,
+        transaction.id,
+        balanceAdjustments: adjustments,
+      );
 
       final notificationsOn = ref.read(settingsProvider).notificationsEnabled;
       if (notificationsOn) {

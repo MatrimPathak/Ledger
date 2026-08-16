@@ -15,6 +15,7 @@ import '../../../providers/categories_provider.dart';
 import '../../../providers/firestore_provider.dart';
 import '../../../providers/payment_modes_provider.dart';
 import '../../../providers/settings_provider.dart';
+import '../../../services/firebase/firestore_service.dart' show BalanceAdjustment;
 import '../../../services/notification/notification_service.dart';
 import '../../categories/widgets/add_category_bottom_sheet.dart';
 import '../../home/widgets/transaction_list_item.dart';
@@ -101,7 +102,6 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
           notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
           affectsBalance: newAffectsBalance,
         );
-        await firestoreService.updateTransaction(updated);
 
         // Adjust balance: handle account change and affectsBalance transitions
         final oldAccountId = widget.editTransaction!.accountId;
@@ -112,30 +112,36 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
             oldType == TransactionType.income ? oldAmount : -oldAmount;
         final newDelta = _type == TransactionType.income ? amount : -amount;
 
+        final adjustments = <BalanceAdjustment>[];
         if (oldAccountId != _accountId!) {
           // Account changed: reverse old leg, apply new leg (each gated independently)
           if (oldAffectsBalance) {
-            await firestoreService.updateAccountBalance(
-                user.uid, oldAccountId, -oldDelta);
+            adjustments
+                .add(BalanceAdjustment(accountId: oldAccountId, delta: -oldDelta));
           }
           if (newAffectsBalance) {
-            await firestoreService.updateAccountBalance(
-                user.uid, _accountId!, newDelta);
+            adjustments
+                .add(BalanceAdjustment(accountId: _accountId!, delta: newDelta));
           }
         } else {
           // Same account — 4-case balance adjustment
           if (oldAffectsBalance && newAffectsBalance) {
-            await firestoreService.updateAccountBalance(
-                user.uid, _accountId!, newDelta - oldDelta);
+            adjustments.add(BalanceAdjustment(
+                accountId: _accountId!, delta: newDelta - oldDelta));
           } else if (oldAffectsBalance && !newAffectsBalance) {
-            await firestoreService.updateAccountBalance(
-                user.uid, _accountId!, -oldDelta);
+            adjustments
+                .add(BalanceAdjustment(accountId: _accountId!, delta: -oldDelta));
           } else if (!oldAffectsBalance && newAffectsBalance) {
-            await firestoreService.updateAccountBalance(
-                user.uid, _accountId!, newDelta);
+            adjustments
+                .add(BalanceAdjustment(accountId: _accountId!, delta: newDelta));
           }
           // both false → no balance change
         }
+
+        await firestoreService.updateTransactionWithBalanceAdjustments(
+          updated,
+          balanceAdjustments: adjustments,
+        );
 
         if (notificationsOn) {
           await NotificationService.showTransactionUpdatedNotification(
@@ -159,12 +165,15 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
           createdAt: now,
           affectsBalance: newAffectsBalance,
         );
-        await firestoreService.createTransaction(tx);
+        final adjustments = <BalanceAdjustment>[];
         if (newAffectsBalance) {
           final delta = _type == TransactionType.income ? amount : -amount;
-          await firestoreService.updateAccountBalance(
-              user.uid, _accountId!, delta);
+          adjustments.add(BalanceAdjustment(accountId: _accountId!, delta: delta));
         }
+        await firestoreService.createTransactionWithBalanceUpdate(
+          tx,
+          balanceAdjustments: adjustments,
+        );
 
         if (notificationsOn) {
           await NotificationService.showTransactionSavedNotification(

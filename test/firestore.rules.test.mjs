@@ -91,3 +91,70 @@ test('documents outside user-owned paths are denied', async () => {
   await assertFails(db.doc('public/config').get());
   await assertFails(db.doc('public/config').set({ enabled: true }));
 });
+
+test('transaction writes require a non-negative numeric amount matching the owner', async () => {
+  const db = testEnv.authenticatedContext('alice').firestore();
+  const txRef = db.doc('users/alice/transactions/tx-1');
+
+  await assertSucceeds(
+    txRef.set({ userId: 'alice', amount: 250, title: 'Coffee' }),
+  );
+  await assertFails(
+    db.doc('users/alice/transactions/tx-bad-amount').set({
+      userId: 'alice',
+      amount: -50,
+      title: 'Refund abuse',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/transactions/tx-bad-owner').set({
+      userId: 'bob',
+      amount: 50,
+      title: 'Spoofed owner',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/transactions/tx-non-numeric').set({
+      userId: 'alice',
+      amount: '50',
+      title: 'Non-numeric amount',
+    }),
+  );
+});
+
+test('transaction writes validate txnCategory and processingStatus enums when present', async () => {
+  const db = testEnv.authenticatedContext('alice').firestore();
+
+  await assertSucceeds(
+    db.doc('users/alice/transactions/tx-valid-enum').set({
+      userId: 'alice',
+      amount: 100,
+      txnCategory: 'creditCardPayment',
+      processingStatus: 'confirmed',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/transactions/tx-bad-category').set({
+      userId: 'alice',
+      amount: 100,
+      txnCategory: 'notARealCategory',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/transactions/tx-bad-status').set({
+      userId: 'alice',
+      amount: 100,
+      processingStatus: 'madeUpStatus',
+    }),
+  );
+});
+
+test('non-transaction subcollections keep the original unconditional owner-write behavior', async () => {
+  const db = testEnv.authenticatedContext('alice').firestore();
+
+  // No userId/amount fields at all — must still succeed, since validation
+  // is scoped to the transactions subcollection only.
+  await assertSucceeds(
+    db.doc('users/alice/merchants/uber').set({ displayName: 'Uber' }),
+  );
+});

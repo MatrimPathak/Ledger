@@ -8,8 +8,32 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == uid;
 
       match /{subcollection}/{docId} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+        allow read, delete: if request.auth != null && request.auth.uid == uid;
+
+        // Field-level validation on top of the owner check. Scoped to the
+        // 'transactions' subcollection only — everything else keeps the
+        // original unconditional owner-write behavior. Fields are validated
+        // only when present so older/partial writes are never rejected.
+        allow create, update: if request.auth != null && request.auth.uid == uid &&
+          (subcollection != 'transactions' ||
+            isValidTransactionWrite(request.resource.data, uid));
       }
+    }
+
+    function isValidTransactionWrite(data, ownerId) {
+      return data.userId == ownerId &&
+        data.amount is number && data.amount >= 0 &&
+        (!('txnCategory' in data) || data.txnCategory in [
+          'expense', 'income', 'transfer',
+          'creditCardPurchase', 'creditCardPayment',
+          'refund', 'adjustment'
+        ]) &&
+        (!('paymentMethod' in data) || data.paymentMethod == null || data.paymentMethod in [
+          'upi', 'bankTransfer', 'debitCard', 'creditCard', 'cash', 'atm', 'wallet'
+        ]) &&
+        (!('processingStatus' in data) || data.processingStatus in [
+          'local', 'needsAiReview', 'aiProcessed', 'confirmed', 'rejected'
+        ]);
     }
   }
 }

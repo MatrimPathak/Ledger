@@ -155,6 +155,144 @@ void main() {
       expect(snap.docs.single.data()['title'], 'Coffee Shop');
     });
   });
+
+  group('FirestoreService atomic balance writes', () {
+    test('createTransactionWithBalanceUpdate applies the balance delta atomically',
+        () async {
+      final firestore = FakeFirebaseFirestore();
+      final service = FirestoreService(firestore: firestore);
+      await firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('accounts')
+          .doc('checking')
+          .set({'balance': 1000});
+
+      final tx = _newTransaction(amount: 250);
+      final saved = await service.createTransactionWithBalanceUpdate(
+        tx,
+        balanceAdjustments: const [
+          BalanceAdjustment(accountId: 'checking', delta: -250),
+        ],
+      );
+
+      expect(saved.id, isNotEmpty);
+      final accountDoc = await firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('accounts')
+          .doc('checking')
+          .get();
+      expect(accountDoc.data()!['balance'], 750);
+    });
+
+    test('createTransactionWithBalanceUpdate skips balance writes when no adjustments are given',
+        () async {
+      final firestore = FakeFirebaseFirestore();
+      final service = FirestoreService(firestore: firestore);
+      await firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('accounts')
+          .doc('checking')
+          .set({'balance': 1000});
+
+      await service.createTransactionWithBalanceUpdate(_newTransaction());
+
+      final accountDoc = await firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('accounts')
+          .doc('checking')
+          .get();
+      expect(accountDoc.data()!['balance'], 1000);
+    });
+
+    test('updateTransactionWithBalanceAdjustments applies deltas to two accounts atomically',
+        () async {
+      final firestore = FakeFirebaseFirestore();
+      final service = FirestoreService(firestore: firestore);
+      final accounts = firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('accounts');
+      await accounts.doc('checking').set({'balance': 1000});
+      await accounts.doc('savings').set({'balance': 500});
+
+      final created = await service.createTransactionWithBalanceUpdate(
+        _newTransaction(accountId: 'checking', amount: 250),
+        balanceAdjustments: const [
+          BalanceAdjustment(accountId: 'checking', delta: -250),
+        ],
+      );
+
+      final moved = created.copyWith(accountId: 'savings');
+      await service.updateTransactionWithBalanceAdjustments(
+        moved,
+        balanceAdjustments: const [
+          BalanceAdjustment(accountId: 'checking', delta: 250),
+          BalanceAdjustment(accountId: 'savings', delta: -250),
+        ],
+      );
+
+      expect((await accounts.doc('checking').get()).data()!['balance'], 1000);
+      expect((await accounts.doc('savings').get()).data()!['balance'], 250);
+    });
+
+    test('deleteTransactionWithBalanceUpdate removes the doc and reverses the balance',
+        () async {
+      final firestore = FakeFirebaseFirestore();
+      final service = FirestoreService(firestore: firestore);
+      final accounts = firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('accounts');
+      await accounts.doc('checking').set({'balance': 1000});
+
+      final created = await service.createTransactionWithBalanceUpdate(
+        _newTransaction(amount: 250),
+        balanceAdjustments: const [
+          BalanceAdjustment(accountId: 'checking', delta: -250),
+        ],
+      );
+
+      await service.deleteTransactionWithBalanceUpdate(
+        'user-1',
+        created.id,
+        balanceAdjustments: const [
+          BalanceAdjustment(accountId: 'checking', delta: 250),
+        ],
+      );
+
+      final txDoc = await firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('transactions')
+          .doc(created.id)
+          .get();
+      expect(txDoc.exists, isFalse);
+      expect((await accounts.doc('checking').get()).data()!['balance'], 1000);
+    });
+  });
+}
+
+app_model.Transaction _newTransaction({
+  String accountId = 'checking',
+  double amount = 250,
+  app_model.TransactionType type = app_model.TransactionType.expense,
+}) {
+  final now = DateTime.utc(2026, 6, 1);
+  return app_model.Transaction(
+    id: '',
+    userId: 'user-1',
+    title: 'Coffee Shop',
+    amount: amount,
+    type: type,
+    date: now,
+    categoryId: 'food',
+    accountId: accountId,
+    createdAt: now,
+  );
 }
 
 _TransactionDoc _transactionDoc({

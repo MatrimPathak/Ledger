@@ -2,10 +2,20 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' hide Category;
 import '../../models/account.dart';
 import '../../models/category.dart';
+import '../../models/merchant.dart';
 import '../../models/payment_mode.dart';
 import '../../models/transaction.dart' as app_model;
 import '../../models/user_profile.dart';
 import '../../core/constants/default_categories.dart';
+
+/// A single account-balance increment to apply as part of an atomic
+/// transaction write, e.g. `{accountId: 'checking', delta: -250}`.
+class BalanceAdjustment {
+  const BalanceAdjustment({required this.accountId, required this.delta});
+
+  final String accountId;
+  final double delta;
+}
 
 class FirestoreService {
   FirestoreService({FirebaseFirestore? firestore})
@@ -27,6 +37,9 @@ class FirestoreService {
 
   CollectionReference _transactions(String uid) =>
       _userDoc(uid).collection('transactions');
+
+  CollectionReference _merchants(String uid) =>
+      _userDoc(uid).collection('merchants');
 
   // User profile
   Future<UserProfile?> getProfile(String uid) async {
@@ -202,6 +215,62 @@ class FirestoreService {
     await _transactions(uid).doc(txId).delete();
   }
 
+  /// Creates [tx] and applies every [balanceAdjustments] increment in a
+  /// single atomic write, so a crash between the transaction-doc write and
+  /// the balance increment can no longer desync the two.
+  Future<app_model.Transaction> createTransactionWithBalanceUpdate(
+    app_model.Transaction tx, {
+    List<BalanceAdjustment> balanceAdjustments = const [],
+  }) async {
+    final docRef = _transactions(tx.userId).doc();
+    await _db.runTransaction((transaction) async {
+      transaction.set(docRef, tx.toFirestore());
+      for (final adjustment in balanceAdjustments) {
+        transaction.update(
+          _accounts(tx.userId).doc(adjustment.accountId),
+          {'balance': FieldValue.increment(adjustment.delta)},
+        );
+      }
+    });
+    return tx.copyWith(id: docRef.id);
+  }
+
+  /// Updates [tx] and applies every [balanceAdjustments] increment
+  /// atomically — used for edits, where up to two accounts (old/new) may
+  /// need reversal/reapplication.
+  Future<void> updateTransactionWithBalanceAdjustments(
+    app_model.Transaction tx, {
+    List<BalanceAdjustment> balanceAdjustments = const [],
+  }) async {
+    await _db.runTransaction((transaction) async {
+      transaction.update(
+          _transactions(tx.userId).doc(tx.id), tx.toFirestore());
+      for (final adjustment in balanceAdjustments) {
+        transaction.update(
+          _accounts(tx.userId).doc(adjustment.accountId),
+          {'balance': FieldValue.increment(adjustment.delta)},
+        );
+      }
+    });
+  }
+
+  /// Deletes the transaction and reverses [balanceAdjustments] atomically.
+  Future<void> deleteTransactionWithBalanceUpdate(
+    String uid,
+    String txId, {
+    List<BalanceAdjustment> balanceAdjustments = const [],
+  }) async {
+    await _db.runTransaction((transaction) async {
+      transaction.delete(_transactions(uid).doc(txId));
+      for (final adjustment in balanceAdjustments) {
+        transaction.update(
+          _accounts(uid).doc(adjustment.accountId),
+          {'balance': FieldValue.increment(adjustment.delta)},
+        );
+      }
+    });
+  }
+
   Future<List<app_model.Transaction>> fetchTransactionsForAnalytics(
       String uid, int days) async {
     final from = DateTime.now().subtract(Duration(days: days));
@@ -215,10 +284,46 @@ class FirestoreService {
         .toList();
   }
 
+  // Merchants
+  Stream<List<Merchant>> watchMerchants(String uid) {
+    return _merchants(uid)
+        .orderBy('createdAt', descending: false)
+        .snapshots()
+        .map((s) => s.docs.map(Merchant.fromFirestore).toList());
+  }
+
+  Future<List<Merchant>> fetchMerchants(String uid) async {
+    final snap = await _merchants(uid).get();
+    return snap.docs.map(Merchant.fromFirestore).toList();
+  }
+
+  Future<Merchant> createMerchant(Merchant merchant) async {
+    final docRef = await _merchants(merchant.userId).add(merchant.toFirestore());
+    return Merchant(
+      id: docRef.id,
+      userId: merchant.userId,
+      displayName: merchant.displayName,
+      normalizedKey: merchant.normalizedKey,
+      defaultCategoryId: merchant.defaultCategoryId,
+      aliasPatterns: merchant.aliasPatterns,
+      createdAt: merchant.createdAt,
+    );
+  }
+
+  Future<void> updateMerchant(Merchant merchant) async {
+    await _merchants(merchant.userId).doc(merchant.id).update(merchant.toFirestore());
+  }
+
   // Delete all user data
   Future<void> deleteAllUserData(String uid) async {
     final batch = _db.batch();
-    final collections = ['accounts', 'paymentModes', 'categories', 'transactions'];
+    final collections = [
+      'accounts',
+      'paymentModes',
+      'categories',
+      'transactions',
+      'merchants',
+    ];
     for (final col in collections) {
       final snap = await _userDoc(uid).collection(col).get();
       for (final doc in snap.docs) {
