@@ -5,6 +5,7 @@ import '../../models/category.dart';
 import '../../models/credit_card_account.dart';
 import '../../models/merchant.dart';
 import '../../models/payment_mode.dart';
+import '../../models/subscription.dart';
 import '../../models/transaction.dart' as app_model;
 import '../../models/user_profile.dart';
 import '../../core/constants/default_categories.dart';
@@ -55,6 +56,9 @@ class FirestoreService {
 
   CollectionReference _creditCardAccounts(String uid) =>
       _userDoc(uid).collection('creditCardAccounts');
+
+  CollectionReference _subscriptions(String uid) =>
+      _userDoc(uid).collection('subscriptions');
 
   // User profile
   Future<UserProfile?> getProfile(String uid) async {
@@ -430,6 +434,50 @@ class FirestoreService {
         .update(account.toFirestore());
   }
 
+  // Subscriptions / recurring detection
+  Stream<List<Subscription>> watchSubscriptions(String uid) {
+    return _subscriptions(uid)
+        .orderBy('nextExpectedDate', descending: false)
+        .snapshots()
+        .map((s) => s.docs.map(Subscription.fromFirestore).toList());
+  }
+
+  Future<List<Subscription>> fetchSubscriptions(String uid) async {
+    final snap = await _subscriptions(uid).get();
+    return snap.docs.map(Subscription.fromFirestore).toList();
+  }
+
+  Future<Subscription> createSubscription(Subscription subscription) async {
+    final docRef =
+        await _subscriptions(subscription.userId).add(subscription.toFirestore());
+    return Subscription(
+      id: docRef.id,
+      userId: subscription.userId,
+      merchantId: subscription.merchantId,
+      merchantNameRaw: subscription.merchantNameRaw,
+      kind: subscription.kind,
+      expectedAmount: subscription.expectedAmount,
+      amountTolerancePercent: subscription.amountTolerancePercent,
+      intervalDays: subscription.intervalDays,
+      lastSeenDate: subscription.lastSeenDate,
+      nextExpectedDate: subscription.nextExpectedDate,
+      matchedTransactionIds: subscription.matchedTransactionIds,
+      status: subscription.status,
+      detectionSource: subscription.detectionSource,
+      createdAt: subscription.createdAt,
+    );
+  }
+
+  Future<void> updateSubscription(Subscription subscription) async {
+    await _subscriptions(subscription.userId)
+        .doc(subscription.id)
+        .update(subscription.toFirestore());
+  }
+
+  Future<void> deleteSubscription(String uid, String subscriptionId) async {
+    await _subscriptions(uid).doc(subscriptionId).delete();
+  }
+
   // Delete all user data
   Future<void> deleteAllUserData(String uid) async {
     final batch = _db.batch();
@@ -440,6 +488,7 @@ class FirestoreService {
       'transactions',
       'merchants',
       'creditCardAccounts',
+      'subscriptions',
     ];
     for (final col in collections) {
       final snap = await _userDoc(uid).collection(col).get();

@@ -8,6 +8,8 @@ import 'auth_provider.dart';
 import 'firestore_provider.dart';
 import 'accounts_provider.dart';
 import '../models/transaction.dart' as app_model;
+import '../models/subscription.dart' as sub_model;
+import 'subscriptions_provider.dart';
 
 final analyticsInsightsProvider =
     FutureProvider<List<AnalyticsInsight>>((ref) async {
@@ -120,8 +122,37 @@ List<Map<String, dynamic>> buildAnalyticsSummary(
           .take(5)
           .map((e) => {'name': e.key, 'count': e.value})
           .toList(),
+      'subscriptionsSummary': _buildSubscriptionsSummary(transactions),
     }
   ];
+}
+
+/// Folds locally-detected recurring patterns into the same aggregated JSON
+/// already sent to Claude for insights — reuses the existing detection
+/// pipeline (`detectSubscriptions`) rather than issuing a second AI call or
+/// duplicating any logic.
+Map<String, dynamic> _buildSubscriptionsSummary(
+    List<app_model.Transaction> transactions) {
+  final detected = detectSubscriptions('_analytics', transactions);
+  int countOf(sub_model.SubscriptionKind kind) =>
+      detected.where((s) => s.kind == kind).length;
+
+  return {
+    'subscriptionCount': countOf(sub_model.SubscriptionKind.subscription),
+    'recurringBillCount': countOf(sub_model.SubscriptionKind.recurringBill),
+    'recurringIncomeCount':
+        countOf(sub_model.SubscriptionKind.recurringIncome),
+    'recurringTransferCount':
+        countOf(sub_model.SubscriptionKind.recurringTransfer),
+    'items': detected
+        .map((s) => {
+              'name': s.displayName,
+              'kind': s.kind.name,
+              'expectedAmount': s.expectedAmount,
+              'intervalDays': s.intervalDays,
+            })
+        .toList(),
+  };
 }
 
 extension _ListExt<T> on List<T> {

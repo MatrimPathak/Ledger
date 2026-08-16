@@ -19,7 +19,9 @@ service cloud.firestore {
           (subcollection != 'transactions' ||
             isValidTransactionWrite(request.resource.data, uid)) &&
           (subcollection != 'creditCardAccounts' ||
-            isValidCreditCardAccountWrite(request.resource.data, uid));
+            isValidCreditCardAccountWrite(request.resource.data, uid)) &&
+          (subcollection != 'subscriptions' ||
+            isValidSubscriptionWrite(request.resource.data, uid));
       }
     }
 
@@ -43,6 +45,17 @@ service cloud.firestore {
       return data.userId == ownerId &&
         (!('currentOutstanding' in data) || data.currentOutstanding is number) &&
         (!('creditLimit' in data) || data.creditLimit is number);
+    }
+
+    function isValidSubscriptionWrite(data, ownerId) {
+      return data.userId == ownerId &&
+        (!('expectedAmount' in data) || data.expectedAmount is number) &&
+        (!('kind' in data) || data.kind in [
+          'subscription', 'recurringBill', 'recurringIncome', 'recurringTransfer'
+        ]) &&
+        (!('status' in data) || data.status in [
+          'active', 'paused', 'cancelled'
+        ]);
     }
   }
 }

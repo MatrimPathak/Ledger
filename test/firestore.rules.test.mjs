@@ -183,3 +183,46 @@ test('credit card account writes require the owner and numeric outstanding/limit
     }),
   );
 });
+
+test('subscription writes require the owner and a known kind/status/numeric amount', async () => {
+  const db = testEnv.authenticatedContext('alice').firestore();
+
+  await assertSucceeds(
+    db.doc('users/alice/subscriptions/sub-1').set({
+      userId: 'alice',
+      merchantNameRaw: 'Netflix',
+      kind: 'subscription',
+      expectedAmount: 649,
+      status: 'active',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/subscriptions/sub-bad-owner').set({
+      userId: 'bob',
+      kind: 'subscription',
+      expectedAmount: 649,
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/subscriptions/sub-bad-kind').set({
+      userId: 'alice',
+      kind: 'notARealKind',
+      expectedAmount: 649,
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/subscriptions/sub-non-numeric').set({
+      userId: 'alice',
+      kind: 'subscription',
+      expectedAmount: '649',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/subscriptions/sub-bad-status').set({
+      userId: 'alice',
+      kind: 'subscription',
+      expectedAmount: 649,
+      status: 'madeUpStatus',
+    }),
+  );
+});
