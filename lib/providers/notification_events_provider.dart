@@ -7,11 +7,15 @@ import '../services/notification/notification_listener_bridge.dart';
 /// asked for events, it isn't told to shut down (the OS owns that via the
 /// user's system settings).
 final notificationEventsProvider =
-    StreamProvider.autoDispose<List<FinancialEvent>>((ref) {
+    StreamProvider.autoDispose<List<FinancialEvent>>((ref) async* {
   final bridge = NotificationListenerBridge.instance;
   bridge.start();
   ref.onDispose(bridge.stop);
-  return bridge.events;
+  // Seed with whatever's already buffered — without this, events that
+  // arrived before this listener attached (e.g. while some other screen was
+  // in the foreground) would be invisible until the *next* event arrives.
+  yield bridge.recentEvents();
+  yield* bridge.events;
 });
 
 /// Live OS-level check — not an app setting — of whether the user has

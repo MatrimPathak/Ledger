@@ -108,16 +108,37 @@ class SmsProcessingWorker(
             }
 
             // Three-tier routing: high confidence never touches the cloud.
+            // Medium confidence sends only a redacted snippet plus whatever
+            // the local parser is still unsure about — mirrors
+            // sms_service.dart's parseSmsPartial path, not the full SMS.
             var aiParsed: ParsedSms? = null
             if (!local.isHighConfidence) {
                 val apiKey = SecurePrefsStore.read(applicationContext, "claude_api_key")
                     ?.takeIf { it.isNotBlank() && it != "YOUR_CLAUDE_API_KEY" }
                 if (apiKey != null) {
-                    aiParsed = callClaudeApi(apiKey, smsBody, accounts, paymentModes)
+                    aiParsed = if (local.isMediumConfidence) {
+                        callClaudeApiPartial(
+                            apiKey,
+                            redactSensitiveDigits(smsBody),
+                            accounts,
+                            paymentModes,
+                            local.amount,
+                            local.direction,
+                            local.paymentMethod,
+                            local.referenceNumber,
+                        )
+                    } else {
+                        callClaudeApi(apiKey, smsBody, accounts, paymentModes)
+                    }
                 }
             }
 
-            val resolvedAmount = aiParsed?.amount ?: local.amount
+            // ParsedSms.amount is non-nullable and defaults to 0.0 when
+            // Claude's response omits it — only trust it when plausible,
+            // otherwise fall back to a valid local extraction rather than
+            // losing the transaction.
+            val aiAmount = aiParsed?.amount?.takeIf { isPlausibleAmount(it) }
+            val resolvedAmount = aiAmount ?: local.amount
             if (resolvedAmount == null || !isPlausibleAmount(resolvedAmount)) {
                 markProcessed(fingerprint, smsTimestamp, prefs)
                 return Result.success()
@@ -161,7 +182,12 @@ class SmsProcessingWorker(
                 put("accountId", resolvedAccountId ?: "")
                 put("paymentModeId", resolvedPaymentModeId)
                 put("source", "sms")
-                put("rawSms", smsBody)
+                // Once a transaction reaches "confirmed" (local parsing was
+                // high-confidence enough to skip review entirely), the raw
+                // SMS has served its purpose and sensitive digit-runs are
+                // redacted before ever being written — mirrors
+                // sms_service.dart's Dart pipeline.
+                put("rawSms", if (processingStatus == "confirmed") redactSensitiveDigits(smsBody) else smsBody)
                 put("createdAt", Timestamp(Date()))
                 put("affectsBalance", affectsBalance)
                 put("txnCategory", txnCategory)
@@ -175,9 +201,6 @@ class SmsProcessingWorker(
                 put("aiModel", if (aiParsed != null) "claude-haiku-4-5-20251001" else null)
                 put("creditCardAccountId", linkedCreditCardAccountId)
             }
-
-            // Mark processed before writing so a concurrent isolate doesn't duplicate.
-            markProcessed(fingerprint, smsTimestamp, prefs)
 
             val txRef = db.collection("users").document(uid).collection("transactions").document()
             db.runTransaction { transaction ->
@@ -209,6 +232,12 @@ class SmsProcessingWorker(
                     }
                 }
             }.await()
+
+            // Mark processed (and advance the watermark) only after the
+            // write actually commits — marking first meant a failed write
+            // silently lost the transaction forever, since the dedup
+            // checks above would then reject every retry of the same SMS.
+            markProcessed(fingerprint, smsTimestamp, prefs)
 
             if (notificationsEnabled) {
                 val currency = accounts.firstOrNull()?.get("currency") as? String ?: "INR"
@@ -440,23 +469,124 @@ $RESPONSE_SCHEMA""".trimIndent()
         }
     }
 
+    // Medium-confidence fallback: the local parser already extracted some
+    // fields reliably, so only a redacted snippet plus the still-uncertain
+    // fields are sent — never the full SMS. Mirrors
+    // ClaudeService.parseSmsPartial in sms_service.dart's Dart pipeline.
+    private suspend fun callClaudeApiPartial(
+        apiKey: String,
+        redactedSmsSnippet: String,
+        accounts: List<Map<String, Any?>>,
+        paymentModes: List<Map<String, Any?>>,
+        knownAmount: Double?,
+        knownDirection: String?,
+        knownPaymentMethod: String?,
+        knownReferenceNumber: String?,
+    ): ParsedSms? = withContext(Dispatchers.IO) {
+        val accountsJson = accounts.joinToString(",") { a ->
+            """{"id":"${a["id"]}","title":"${a["title"]}","bank":"${a["bankName"]}","last6":"${a["lastSixDigits"]}"}"""
+        }
+        val modesJson = paymentModes.joinToString(",") { m ->
+            """{"id":"${m["id"]}","type":"${m["type"]}","last4":"${m["lastFourDigits"] ?: ""}","upiId":"${m["upiId"] ?: ""}"}"""
+        }
+        val knownFields = listOfNotNull(
+            knownAmount?.let { "amount: $it" },
+            knownDirection?.let { "direction: $it" },
+            knownPaymentMethod?.let { "paymentMethod: $it" },
+            knownReferenceNumber?.let { "referenceNumber: $it" },
+        ).joinToString(", ")
+
+        val prompt = """
+You are a financial SMS parser for Indian banking. Some fields were already extracted locally with reasonable confidence — treat them as reliable unless the SMS snippet clearly contradicts them. Focus on completing/confirming the rest. Return ONLY valid JSON with no markdown or explanation.
+
+Already extracted: {$knownFields}
+
+Accounts: [$accountsJson]
+PaymentModes: [$modesJson]
+
+SMS snippet (account numbers/balance figures redacted, not needed to classify the transaction): "$redactedSmsSnippet"
+
+$SPECIAL_CASES
+
+$RESPONSE_SCHEMA""".trimIndent()
+
+        val requestBody = JSONObject().apply {
+            put("model", "claude-haiku-4-5-20251001")
+            put("max_tokens", 256)
+            put("system", "You are a financial SMS parser. Return ONLY valid JSON.")
+            put("messages", JSONArray().apply {
+                put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", prompt)
+                })
+            })
+        }.toString()
+
+        val responseText = try {
+            sendClaudeRequest(requestBody, apiKey)
+        } catch (_: java.io.IOException) {
+            try {
+                delay(2_000)
+                sendClaudeRequest(requestBody, apiKey)
+            } catch (_: Exception) {
+                null
+            }
+        } catch (_: Exception) {
+            null
+        }
+
+        val text = responseText ?: return@withContext null
+        try {
+            val content = JSONObject(text)
+                .getJSONArray("content").getJSONObject(0).getString("text")
+            val parsed = JSONObject(stripMarkdown(content))
+
+            val confidence = parsed.optDouble("confidence", 0.0)
+            if (confidence < CONFIDENCE_THRESHOLD) return@withContext null
+
+            val accountId = parsed.optString("accountId").takeIf { it.isNotEmpty() && it != "null" }
+            val paymentModeId = parsed.optString("paymentModeId").takeIf { it.isNotEmpty() && it != "null" }
+
+            ParsedSms(
+                title = parsed.optString("title", "Transaction"),
+                amount = parsed.optDouble("amount", knownAmount ?: 0.0),
+                type = parsed.optString("type", "expense"),
+                accountId = accountId,
+                paymentModeId = paymentModeId,
+                categorySlug = parsed.optString("suggestedCategorySlug", "other"),
+                confidence = confidence,
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
     // Returns the raw response body on HTTP 200, or null on any other
-    // status code (a real, non-retryable answer from the API).
+    // status code (a real, non-retryable answer from the API). Always
+    // disconnects and drains any error stream so the connection doesn't
+    // leak out of the keep-alive pool.
     private fun sendClaudeRequest(requestBody: String, apiKey: String): String? {
         val conn = URL("https://api.anthropic.com/v1/messages")
             .openConnection() as HttpURLConnection
-        conn.apply {
-            requestMethod = "POST"
-            setRequestProperty("Content-Type", "application/json")
-            setRequestProperty("x-api-key", apiKey)
-            setRequestProperty("anthropic-version", "2023-06-01")
-            doOutput = true
-            connectTimeout = 15_000
-            readTimeout = 30_000
+        try {
+            conn.apply {
+                requestMethod = "POST"
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("x-api-key", apiKey)
+                setRequestProperty("anthropic-version", "2023-06-01")
+                doOutput = true
+                connectTimeout = 15_000
+                readTimeout = 30_000
+            }
+            conn.outputStream.use { it.write(requestBody.toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode != 200) {
+                conn.errorStream?.use { it.readBytes() }
+                return null
+            }
+            return conn.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            conn.disconnect()
         }
-        conn.outputStream.use { it.write(requestBody.toByteArray(Charsets.UTF_8)) }
-        if (conn.responseCode != 200) return null
-        return conn.inputStream.bufferedReader().readText()
     }
 
     private fun stripMarkdown(text: String): String {
@@ -608,5 +738,23 @@ $RESPONSE_SCHEMA""".trimIndent()
   "suggestedCategorySlug": one of [food, transport, entertainment, shopping, bills, health, salary, investment, groceries, education, travel, transfer, other],
   "confidence": float 0.0-1.0
 }"""
+
+        // Kept identical to redactSensitiveDigits in
+        // lib/core/utils/sms_redaction.dart — masks digit runs of 6+
+        // characters (account numbers, balance figures) near account/
+        // balance keywords, so both the redacted Claude request and the
+        // persisted rawSms drop the same sensitive figures.
+        private val REDACT_PATTERN = Regex(
+            "((?:a/?c|acct|account|bal(?:ance)?)[^\\d]{0,15})([0-9,]{6,})",
+            RegexOption.IGNORE_CASE,
+        )
+
+        fun redactSensitiveDigits(smsBody: String): String {
+            return REDACT_PATTERN.replace(smsBody) { match ->
+                val prefix = match.groupValues[1]
+                val digits = match.groupValues[2]
+                prefix + "•".repeat(digits.length)
+            }
+        }
     }
 }

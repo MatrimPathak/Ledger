@@ -340,7 +340,15 @@ class Transaction {
         merchantConfidence: merchantConfidence != null
             ? merchantConfidence()
             : this.merchantConfidence,
-        txnCategory: txnCategory ?? this.txnCategory,
+        // If the caller flips expense<->income without also specifying an
+        // explicit txnCategory, re-derive it from the new type — otherwise
+        // a transaction could end up with e.g. type: income but a stale
+        // txnCategory: expense, which analytics and credit-card accounting
+        // both read.
+        txnCategory: txnCategory ??
+            ((type != null && type != this.type)
+                ? TxnCategoryExt.fromLegacyType(type)
+                : this.txnCategory),
         paymentMethod:
             paymentMethod != null ? paymentMethod() : this.paymentMethod,
         sourceMessageId:

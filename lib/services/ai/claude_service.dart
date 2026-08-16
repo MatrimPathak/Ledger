@@ -151,8 +151,12 @@ class ClaudeService {
       return null;
     }
 
-    if (cacheKey != null && _smsParseCache.containsKey(cacheKey)) {
-      return _smsParseCache[cacheKey];
+    // Namespaced so an identical cacheKey passed to parseSmsPartial (a
+    // different prompt shape, different rawSms treatment) can never return
+    // this method's cached result or vice versa.
+    final scopedKey = cacheKey != null ? 'full:$cacheKey' : null;
+    if (scopedKey != null && _smsParseCache.containsKey(scopedKey)) {
+      return _smsParseCache[scopedKey];
     }
 
     final accountsContext = accounts
@@ -214,7 +218,7 @@ $_responseSchema''';
       result = null;
     }
 
-    if (cacheKey != null) _cacheResult(cacheKey, result);
+    if (scopedKey != null) _cacheResult(scopedKey, result);
     return result;
   }
 
@@ -238,8 +242,9 @@ $_responseSchema''';
       return null;
     }
 
-    if (cacheKey != null && _smsParseCache.containsKey(cacheKey)) {
-      return _smsParseCache[cacheKey];
+    final scopedKey = cacheKey != null ? 'partial:$cacheKey' : null;
+    if (scopedKey != null && _smsParseCache.containsKey(scopedKey)) {
+      return _smsParseCache[scopedKey];
     }
 
     final accountsContext = accounts
@@ -310,7 +315,7 @@ $_responseSchema''';
       result = null;
     }
 
-    if (cacheKey != null) _cacheResult(cacheKey, result);
+    if (scopedKey != null) _cacheResult(scopedKey, result);
     return result;
   }
 

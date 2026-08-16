@@ -23,4 +23,17 @@ class SecurePrefsBridge {
       // fails — the foreground Dart pipeline is unaffected.
     }
   }
+
+  /// Clears a previously-mirrored value (e.g. on sign-out, or when no valid
+  /// API key resolves) so the background worker doesn't keep acting on a
+  /// stale uid/key that no longer applies.
+  static Future<void> remove(String key) async {
+    try {
+      await _channel.invokeMethod('remove', {'key': key});
+    } on MissingPluginException {
+      // No channel handler on this platform (e.g. iOS, widget tests).
+    } on PlatformException {
+      // Best-effort — see write() above.
+    }
+  }
 }

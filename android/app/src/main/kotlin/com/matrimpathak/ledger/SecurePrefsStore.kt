@@ -53,4 +53,8 @@ object SecurePrefsStore {
     }
 
     fun read(context: Context, key: String): String? = prefs(context).getString(key, null)
+
+    fun remove(context: Context, key: String) {
+        prefs(context).edit().remove(key).apply()
+    }
 }

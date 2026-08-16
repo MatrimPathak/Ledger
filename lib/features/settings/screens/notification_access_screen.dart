@@ -124,7 +124,15 @@ class _NotificationAccessScreenState
                     width: double.infinity,
                     child: OutlinedButton(
                       onPressed: () async {
-                        await NotificationListenerBridge.openSettings();
+                        final opened =
+                            await NotificationListenerBridge.openSettings();
+                        if (opened || !context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Text(
+                                'Could not open settings. Open your device Settings → Apps → Special access → Notification access manually.'),
+                          ),
+                        );
                       },
                       child: Text(granted
                           ? 'Open system settings'

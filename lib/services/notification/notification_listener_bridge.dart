@@ -36,8 +36,14 @@ class NotificationListenerBridge {
     _subscription ??= _events.receiveBroadcastStream().listen(
       (raw) {
         if (raw is! Map) return;
+        final FinancialEvent event;
+        try {
+          event = FinancialEvent.fromMap(raw);
+        } catch (_) {
+          return; // Malformed payload — drop it, don't corrupt the buffer.
+        }
         _prune();
-        _buffer.add(FinancialEvent.fromMap(raw));
+        _buffer.add(event);
         if (_buffer.length > maxBufferedEvents) {
           _buffer.removeAt(0);
         }
@@ -50,6 +56,10 @@ class NotificationListenerBridge {
   void stop() {
     _subscription?.cancel();
     _subscription = null;
+    // Matches the "events live in memory for a few minutes" claim made in
+    // the consent screen — once nothing is listening, don't let them
+    // outlive their TTL in memory for no reason.
+    _buffer.clear();
   }
 
   List<FinancialEvent> recentEvents() {
@@ -74,10 +84,15 @@ class NotificationListenerBridge {
 
   /// Opens the system's notification-access settings screen — the only way
   /// to grant/revoke [BIND_NOTIFICATION_LISTENER_SERVICE] access, by
-  /// Android design (never a normal runtime permission dialog).
-  static Future<void> openSettings() async {
+  /// Android design (never a normal runtime permission dialog). Returns
+  /// false if the intent couldn't be launched, so the caller can tell the
+  /// user instead of the button silently doing nothing.
+  static Future<bool> openSettings() async {
     try {
       await _access.invokeMethod<void>('openSettings');
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 }

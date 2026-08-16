@@ -12,13 +12,14 @@ void main() {
     double amount = 250,
     DateTime? date,
     TxnPaymentMethod? paymentMethod,
+    TransactionType type = TransactionType.expense,
   }) =>
       Transaction(
         id: 'tx-1',
         userId: 'user-1',
         title: 'UPI Payment',
         amount: amount,
-        type: TransactionType.expense,
+        type: type,
         date: date ?? now,
         categoryId: 'general',
         accountId: 'account-1',
@@ -30,8 +31,10 @@ void main() {
     String packageName = 'com.ubercab',
     double? amount = 250,
     DateTime? postTime,
+    String? eventTypeGuess,
   }) =>
       FinancialEvent(
+        eventTypeGuess: eventTypeGuess,
         packageName: packageName,
         postTime: postTime ?? now,
         amount: amount,
@@ -127,6 +130,35 @@ void main() {
         event: event(packageName: 'com.some.random.app'),
       );
       expect(score, greaterThan(0));
+    });
+
+    test('a credit event hard-rejects against an expense transaction', () {
+      final score = engine.scoreCorrelation(
+        candidateTx: tx(type: TransactionType.expense, paymentMethod: TxnPaymentMethod.upi),
+        event: event(eventTypeGuess: 'credit'),
+      );
+      expect(score, 0.0);
+    });
+
+    test('a debit event hard-rejects against an income transaction', () {
+      final score = engine.scoreCorrelation(
+        candidateTx: tx(type: TransactionType.income, paymentMethod: TxnPaymentMethod.upi),
+        event: event(eventTypeGuess: 'debit'),
+      );
+      expect(score, 0.0);
+    });
+
+    test('a null/unknown direction guess is not treated as a conflict', () {
+      final unknownScore = engine.scoreCorrelation(
+        candidateTx: tx(paymentMethod: TxnPaymentMethod.upi),
+        event: event(eventTypeGuess: 'unknown'),
+      );
+      final nullScore = engine.scoreCorrelation(
+        candidateTx: tx(paymentMethod: TxnPaymentMethod.upi),
+        event: event(),
+      );
+      expect(unknownScore, greaterThan(0));
+      expect(nullScore, greaterThan(0));
     });
   });
 

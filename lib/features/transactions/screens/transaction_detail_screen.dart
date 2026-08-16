@@ -18,7 +18,8 @@ import '../../../providers/payment_modes_provider.dart';
 import '../../../providers/accounts_provider.dart';
 import '../../../providers/settings_provider.dart';
 import '../../../services/correlation/event_correlation_engine.dart';
-import '../../../services/firebase/firestore_service.dart' show BalanceAdjustment;
+import '../../../services/firebase/firestore_service.dart'
+    show BalanceAdjustment, CreditCardAdjustment;
 import '../../../services/notification/notification_service.dart';
 import '../../home/widgets/transaction_list_item.dart';
 
@@ -303,10 +304,25 @@ class _TransactionDetailBody extends ConsumerWidget {
         adjustments.add(BalanceAdjustment(
             accountId: transaction.accountId, delta: reverseDelta));
       }
+      // Reverse the credit-card outstanding effect too — a purchase raised
+      // it, a payment lowered it, and deleting the transaction must undo
+      // exactly that, mirroring the create-time logic in sms_service.dart.
+      final creditCardAdjustments = <CreditCardAdjustment>[];
+      final cardId = transaction.creditCardAccountId;
+      if (cardId != null) {
+        if (transaction.txnCategory == TxnCategory.creditCardPurchase) {
+          creditCardAdjustments.add(CreditCardAdjustment(
+              creditCardAccountId: cardId, delta: -transaction.amount));
+        } else if (transaction.txnCategory == TxnCategory.creditCardPayment) {
+          creditCardAdjustments.add(CreditCardAdjustment(
+              creditCardAccountId: cardId, delta: transaction.amount));
+        }
+      }
       await firestoreService.deleteTransactionWithBalanceUpdate(
         user.uid,
         transaction.id,
         balanceAdjustments: adjustments,
+        creditCardAdjustments: creditCardAdjustments,
       );
 
       final notificationsOn = ref.read(settingsProvider).notificationsEnabled;
@@ -366,7 +382,12 @@ class _CorrelationSuggestionChipState
         _engine.bestMatch(candidateTx: widget.transaction, events: events);
     if (match == null) return const SizedBox.shrink();
 
-    final hint = _engine.merchantHint(match) ?? 'a payment app';
+    // No package hint means nothing meaningful to suggest or confirm — a
+    // real merchant name is required before this ever creates/aliases a
+    // Merchant doc, so an unrecognized package shows no chip at all rather
+    // than a junk "a payment app" merchant every unrelated app would share.
+    final hint = _engine.merchantHint(match);
+    if (hint == null) return const SizedBox.shrink();
     final theme = Theme.of(context);
 
     return Container(

@@ -6,6 +6,6 @@ import 'firestore_provider.dart';
 final creditCardAccountsProvider =
     StreamProvider<List<CreditCardAccount>>((ref) {
   final user = ref.watch(authStateProvider).value;
-  if (user == null) return const Stream.empty();
+  if (user == null) return Stream.value(const <CreditCardAccount>[]);
   return ref.watch(firestoreServiceProvider).watchCreditCardAccounts(user.uid);
 });

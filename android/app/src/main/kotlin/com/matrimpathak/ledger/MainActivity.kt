@@ -56,6 +56,15 @@ class MainActivity : FlutterActivity() {
                         result.error("INVALID_ARGS", "key and value are required", null)
                     }
                 }
+                "remove" -> {
+                    val key = call.argument<String>("key")
+                    if (key != null) {
+                        SecurePrefsStore.remove(applicationContext, key)
+                        result.success(null)
+                    } else {
+                        result.error("INVALID_ARGS", "key is required", null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }

@@ -27,8 +27,8 @@ service cloud.firestore {
 
     function isValidTransactionWrite(data, ownerId) {
       return data.userId == ownerId &&
-        data.amount is number && data.amount >= 0 &&
-        (!('txnCategory' in data) || data.txnCategory in [
+        (!('amount' in data) || (data.amount is number && data.amount >= 0)) &&
+        (!('txnCategory' in data) || data.txnCategory == null || data.txnCategory in [
           'expense', 'income', 'transfer',
           'creditCardPurchase', 'creditCardPayment',
           'refund', 'adjustment'
@@ -36,7 +36,7 @@ service cloud.firestore {
         (!('paymentMethod' in data) || data.paymentMethod == null || data.paymentMethod in [
           'upi', 'bankTransfer', 'debitCard', 'creditCard', 'cash', 'atm', 'wallet'
         ]) &&
-        (!('processingStatus' in data) || data.processingStatus in [
+        (!('processingStatus' in data) || data.processingStatus == null || data.processingStatus in [
           'local', 'needsAiReview', 'aiProcessed', 'confirmed', 'rejected'
         ]);
     }

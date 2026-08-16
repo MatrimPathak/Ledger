@@ -262,7 +262,14 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       }
     }
 
-    final resolvedAmount = aiParsed?.parsed.amount ?? localResult.amount;
+    // ParsedSmsTransaction.amount is non-nullable and defaults to 0.0 when
+    // Claude's response omits it — falling straight through to `??` would
+    // never reach localResult.amount in that case, discarding a perfectly
+    // good local extraction. Only trust the AI amount when it's plausible.
+    final aiAmount = aiParsed?.parsed.amount;
+    final resolvedAmount = (aiAmount != null && isPlausibleAmount(aiAmount))
+        ? aiAmount
+        : localResult.amount;
     if (resolvedAmount == null || !isPlausibleAmount(resolvedAmount)) {
       // Nothing usable was extracted either locally or via AI — there is no
       // transaction to record. This mirrors the previous "silently skip"
@@ -349,7 +356,14 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
           : body,
       createdAt: now,
       affectsBalance: affectsBalance,
-      merchantConfidence: localResult.isHighConfidence ? localResult.confidence : null,
+      // localResult.confidence scores the *whole* parse (amount, direction,
+      // reference number, instrument match, payment method, merchant
+      // together) — only meaningful as a merchant-confidence signal when a
+      // merchant candidate was actually found.
+      merchantConfidence: (localResult.isHighConfidence &&
+              localResult.merchantCandidate != null)
+          ? localResult.confidence
+          : null,
       txnCategory: txnCategory,
       paymentMethod: tx_model.TxnPaymentMethodExt.fromString(localResult.paymentMethod),
       sourceMessageId: fingerprint,
@@ -361,16 +375,6 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       aiModel: aiParsed != null ? AppConstants.claudeSmsFastModel : null,
       creditCardAccountId: linkedCreditCardAccount?.id,
     );
-
-    // Mark processed before writing to Firestore so a concurrent isolate
-    // won't pass the dedup check and create a duplicate transaction.
-    await _markProcessed(fingerprint, prefs);
-    if (smsTimestamp != null) {
-      final last = prefs.getInt(AppConstants.prefKeyLastSmsTimestamp) ?? 0;
-      if (smsTimestamp > last) {
-        await prefs.setInt(AppConstants.prefKeyLastSmsTimestamp, smsTimestamp);
-      }
-    }
 
     final adjustments = <BalanceAdjustment>[];
     if (resolvedAccountId != null && affectsBalance) {
@@ -402,6 +406,20 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       balanceAdjustments: adjustments,
       creditCardAdjustments: creditCardAdjustments,
     );
+
+    // Mark processed (and advance the watermark) only after the write
+    // actually commits — marking first meant a failed write silently lost
+    // the transaction forever, since the dedup guards would then reject
+    // every retry of the same SMS. The Firestore-side dedup checks earlier
+    // in this function already prevent a genuine duplicate write from a
+    // concurrent isolate in the narrow window this reordering reopens.
+    await _markProcessed(fingerprint, prefs);
+    if (smsTimestamp != null) {
+      final last = prefs.getInt(AppConstants.prefKeyLastSmsTimestamp) ?? 0;
+      if (smsTimestamp > last) {
+        await prefs.setInt(AppConstants.prefKeyLastSmsTimestamp, smsTimestamp);
+      }
+    }
 
     final currency = accounts.isNotEmpty ? accounts.first.currency : 'INR';
     final reviewSuffix =

@@ -428,10 +428,14 @@ class FirestoreService {
     );
   }
 
+  /// Excludes `currentOutstanding` — that field is only ever written via
+  /// the atomic `FieldValue.increment()` calls above. Writing the full
+  /// `toFirestore()` map here would let a stale in-memory snapshot (e.g.
+  /// editing the card's due date) clobber an outstanding-balance increment
+  /// that landed concurrently from a new purchase/payment.
   Future<void> updateCreditCardAccount(CreditCardAccount account) async {
-    await _creditCardAccounts(account.userId)
-        .doc(account.id)
-        .update(account.toFirestore());
+    final data = account.toFirestore()..remove('currentOutstanding');
+    await _creditCardAccounts(account.userId).doc(account.id).update(data);
   }
 
   // Subscriptions / recurring detection
@@ -478,9 +482,13 @@ class FirestoreService {
     await _subscriptions(uid).doc(subscriptionId).delete();
   }
 
-  // Delete all user data
+  // Delete all user data. A single WriteBatch caps out at 500 operations —
+  // the transactions collection alone routinely exceeds that for an
+  // SMS-ingesting ledger — so deletes are chunked across as many batches as
+  // needed rather than committed all at once.
+  static const int _maxBatchOps = 500;
+
   Future<void> deleteAllUserData(String uid) async {
-    final batch = _db.batch();
     final collections = [
       'accounts',
       'paymentModes',
@@ -490,13 +498,27 @@ class FirestoreService {
       'creditCardAccounts',
       'subscriptions',
     ];
+
+    var batch = _db.batch();
+    var opsInBatch = 0;
+
+    Future<void> flush() async {
+      if (opsInBatch == 0) return;
+      await batch.commit();
+      batch = _db.batch();
+      opsInBatch = 0;
+    }
+
     for (final col in collections) {
       final snap = await _userDoc(uid).collection(col).get();
       for (final doc in snap.docs) {
         batch.delete(doc.reference);
+        opsInBatch++;
+        if (opsInBatch >= _maxBatchOps) await flush();
       }
     }
     batch.delete(_userDoc(uid));
-    await batch.commit();
+    opsInBatch++;
+    await flush();
   }
 }

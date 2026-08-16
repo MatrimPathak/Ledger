@@ -49,6 +49,17 @@ class EventCorrelationEngine {
     final gap = candidateTx.date.difference(event.postTime).abs();
     if (gap > const Duration(minutes: 5)) return 0.0;
 
+    // A debit notification can't correlate with an income transaction, and
+    // a credit notification can't correlate with an expense — amount and
+    // timing alone aren't enough to rule out that kind of mismatch. A
+    // null/"unknown" guess (the common case — most notifications don't say
+    // debit/credit explicitly) is not a conflict and scores normally.
+    final guess = event.eventTypeGuess;
+    final directionConflict = (guess == 'debit' &&
+            candidateTx.type == TransactionType.income) ||
+        (guess == 'credit' && candidateTx.type == TransactionType.expense);
+    if (directionConflict) return 0.0;
+
     var points = 0;
 
     if (relativeDiff <= 0.001) {

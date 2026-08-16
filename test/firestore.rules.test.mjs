@@ -147,6 +147,18 @@ test('transaction writes validate txnCategory and processingStatus enums when pr
       processingStatus: 'madeUpStatus',
     }),
   );
+  // A present-but-null txnCategory/processingStatus must be allowed (not
+  // just an absent key) — matches how paymentMethod is already treated,
+  // and how Transaction.toFirestore() can legitimately write null for an
+  // optional field that hasn't been resolved yet.
+  await assertSucceeds(
+    db.doc('users/alice/transactions/tx-null-enums').set({
+      userId: 'alice',
+      amount: 100,
+      txnCategory: null,
+      processingStatus: null,
+    }),
+  );
 });
 
 test('non-transaction subcollections keep the original unconditional owner-write behavior', async () => {
