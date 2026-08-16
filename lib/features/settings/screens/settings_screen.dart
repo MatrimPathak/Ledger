@@ -10,6 +10,7 @@ import '../../../providers/auth_provider.dart';
 import '../../../providers/battery_opt_provider.dart';
 import '../../../providers/firestore_provider.dart';
 import '../../../providers/settings_provider.dart';
+import '../../../services/firebase/reconciliation_service.dart';
 import '../../../services/secure/secure_prefs_bridge.dart';
 import '../../../services/sms/sms_service.dart';
 import '../../../services/battery_optimization_service.dart';
@@ -178,6 +179,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 subtitle: 'Required for AI insights',
                 onTap: () => _editApiKey(context),
               ),
+              // Data
+              _SectionHeader('Data'),
+              _SettingsTile(
+                icon: Icons.fact_check_outlined,
+                title: 'Verify Card Balances',
+                subtitle: 'Recompute credit card outstanding from your transaction history',
+                onTap: () => _verifyBalances(context),
+              ),
               // Account
               _SectionHeader('Account'),
               _SettingsTile(
@@ -217,6 +226,32 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         ],
       ),
     );
+  }
+
+  Future<void> _verifyBalances(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(content: Text('Checking balances…')));
+    try {
+      final result = await ReconciliationService().reconcileBalances();
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            result.checked == 0
+                ? 'No credit cards to check yet.'
+                : result.allMatch
+                    ? 'All ${result.checked} card balance(s) verified.'
+                    : '${result.mismatched} of ${result.checked} card balance(s) may be out of sync — review them in Accounts.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (context.mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Could not verify balances: $e')),
+        );
+      }
+    }
   }
 
   Future<void> _editApiKey(BuildContext context) async {

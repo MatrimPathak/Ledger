@@ -2,6 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart' hide Category;
 import '../../models/account.dart';
 import '../../models/category.dart';
+import '../../models/credit_card_account.dart';
 import '../../models/merchant.dart';
 import '../../models/payment_mode.dart';
 import '../../models/transaction.dart' as app_model;
@@ -14,6 +15,17 @@ class BalanceAdjustment {
   const BalanceAdjustment({required this.accountId, required this.delta});
 
   final String accountId;
+  final double delta;
+}
+
+/// A single credit-card-outstanding increment to apply atomically
+/// alongside a transaction write — positive for a purchase (outstanding
+/// grows), negative for a bill payment (outstanding shrinks).
+class CreditCardAdjustment {
+  const CreditCardAdjustment(
+      {required this.creditCardAccountId, required this.delta});
+
+  final String creditCardAccountId;
   final double delta;
 }
 
@@ -40,6 +52,9 @@ class FirestoreService {
 
   CollectionReference _merchants(String uid) =>
       _userDoc(uid).collection('merchants');
+
+  CollectionReference _creditCardAccounts(String uid) =>
+      _userDoc(uid).collection('creditCardAccounts');
 
   // User profile
   Future<UserProfile?> getProfile(String uid) async {
@@ -215,12 +230,14 @@ class FirestoreService {
     await _transactions(uid).doc(txId).delete();
   }
 
-  /// Creates [tx] and applies every [balanceAdjustments] increment in a
-  /// single atomic write, so a crash between the transaction-doc write and
-  /// the balance increment can no longer desync the two.
+  /// Creates [tx] and applies every [balanceAdjustments]/
+  /// [creditCardAdjustments] increment in a single atomic write, so a
+  /// crash mid-write can no longer desync the transaction doc from the
+  /// account balance or card outstanding it affects.
   Future<app_model.Transaction> createTransactionWithBalanceUpdate(
     app_model.Transaction tx, {
     List<BalanceAdjustment> balanceAdjustments = const [],
+    List<CreditCardAdjustment> creditCardAdjustments = const [],
   }) async {
     final docRef = _transactions(tx.userId).doc();
     await _db.runTransaction((transaction) async {
@@ -231,16 +248,23 @@ class FirestoreService {
           {'balance': FieldValue.increment(adjustment.delta)},
         );
       }
+      for (final adjustment in creditCardAdjustments) {
+        transaction.update(
+          _creditCardAccounts(tx.userId).doc(adjustment.creditCardAccountId),
+          {'currentOutstanding': FieldValue.increment(adjustment.delta)},
+        );
+      }
     });
     return tx.copyWith(id: docRef.id);
   }
 
-  /// Updates [tx] and applies every [balanceAdjustments] increment
-  /// atomically — used for edits, where up to two accounts (old/new) may
-  /// need reversal/reapplication.
+  /// Updates [tx] and applies every [balanceAdjustments]/
+  /// [creditCardAdjustments] increment atomically — used for edits, where
+  /// up to two accounts (old/new) may need reversal/reapplication.
   Future<void> updateTransactionWithBalanceAdjustments(
     app_model.Transaction tx, {
     List<BalanceAdjustment> balanceAdjustments = const [],
+    List<CreditCardAdjustment> creditCardAdjustments = const [],
   }) async {
     await _db.runTransaction((transaction) async {
       transaction.update(
@@ -251,14 +275,22 @@ class FirestoreService {
           {'balance': FieldValue.increment(adjustment.delta)},
         );
       }
+      for (final adjustment in creditCardAdjustments) {
+        transaction.update(
+          _creditCardAccounts(tx.userId).doc(adjustment.creditCardAccountId),
+          {'currentOutstanding': FieldValue.increment(adjustment.delta)},
+        );
+      }
     });
   }
 
-  /// Deletes the transaction and reverses [balanceAdjustments] atomically.
+  /// Deletes the transaction and reverses [balanceAdjustments]/
+  /// [creditCardAdjustments] atomically.
   Future<void> deleteTransactionWithBalanceUpdate(
     String uid,
     String txId, {
     List<BalanceAdjustment> balanceAdjustments = const [],
+    List<CreditCardAdjustment> creditCardAdjustments = const [],
   }) async {
     await _db.runTransaction((transaction) async {
       transaction.delete(_transactions(uid).doc(txId));
@@ -266,6 +298,12 @@ class FirestoreService {
         transaction.update(
           _accounts(uid).doc(adjustment.accountId),
           {'balance': FieldValue.increment(adjustment.delta)},
+        );
+      }
+      for (final adjustment in creditCardAdjustments) {
+        transaction.update(
+          _creditCardAccounts(uid).doc(adjustment.creditCardAccountId),
+          {'currentOutstanding': FieldValue.increment(adjustment.delta)},
         );
       }
     });
@@ -351,6 +389,47 @@ class FirestoreService {
     await _merchants(merchant.userId).doc(merchant.id).update(merchant.toFirestore());
   }
 
+  // Credit card accounts
+  Stream<List<CreditCardAccount>> watchCreditCardAccounts(String uid) {
+    return _creditCardAccounts(uid)
+        .orderBy('createdAt', descending: false)
+        .snapshots()
+        .map((s) => s.docs.map(CreditCardAccount.fromFirestore).toList());
+  }
+
+  Future<List<CreditCardAccount>> fetchCreditCardAccounts(String uid) async {
+    final snap = await _creditCardAccounts(uid).get();
+    return snap.docs.map(CreditCardAccount.fromFirestore).toList();
+  }
+
+  Future<CreditCardAccount> createCreditCardAccount(
+      CreditCardAccount account) async {
+    final docRef =
+        await _creditCardAccounts(account.userId).add(account.toFirestore());
+    return CreditCardAccount(
+      id: docRef.id,
+      userId: account.userId,
+      paymentModeId: account.paymentModeId,
+      title: account.title,
+      bankName: account.bankName,
+      lastFourDigits: account.lastFourDigits,
+      creditLimit: account.creditLimit,
+      currentOutstanding: account.currentOutstanding,
+      statementDay: account.statementDay,
+      dueDay: account.dueDay,
+      minimumDuePercent: account.minimumDuePercent,
+      currency: account.currency,
+      createdAt: account.createdAt,
+      needsReconciliation: account.needsReconciliation,
+    );
+  }
+
+  Future<void> updateCreditCardAccount(CreditCardAccount account) async {
+    await _creditCardAccounts(account.userId)
+        .doc(account.id)
+        .update(account.toFirestore());
+  }
+
   // Delete all user data
   Future<void> deleteAllUserData(String uid) async {
     final batch = _db.batch();
@@ -360,6 +439,7 @@ class FirestoreService {
       'categories',
       'transactions',
       'merchants',
+      'creditCardAccounts',
     ];
     for (final col in collections) {
       final snap = await _userDoc(uid).collection(col).get();

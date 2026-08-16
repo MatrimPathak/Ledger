@@ -187,6 +187,7 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     final firestoreService = FirestoreService();
     final accounts = await firestoreService.fetchAccounts(uid);
     final paymentModes = await firestoreService.fetchPaymentModes(uid);
+    final creditCardAccounts = await firestoreService.fetchCreditCardAccounts(uid);
 
     final txDate = smsTimestamp != null
         ? DateTime.fromMillisecondsSinceEpoch(smsTimestamp)
@@ -286,6 +287,11 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
         : null;
     final affectsBalance = resolvedMode?.type.affectsAccountBalance ?? true;
 
+    final txnCategory = _resolveTxnCategory(localResult.txnCategoryHint, txType);
+    final linkedCreditCardAccount = resolvedMode?.type == PaymentModeType.creditCard
+        ? creditCardAccounts.where((c) => c.paymentModeId == resolvedMode!.id).firstOrNull
+        : null;
+
     final categories = await firestoreService.watchCategories(uid).first;
     final slug = aiParsed?.parsed.suggestedCategorySlug;
     final category = await resolveOrCreateCategory(
@@ -325,7 +331,7 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       createdAt: now,
       affectsBalance: affectsBalance,
       merchantConfidence: localResult.isHighConfidence ? localResult.confidence : null,
-      txnCategory: _resolveTxnCategory(localResult.txnCategoryHint, txType),
+      txnCategory: txnCategory,
       paymentMethod: tx_model.TxnPaymentMethodExt.fromString(localResult.paymentMethod),
       sourceMessageId: fingerprint,
       sourceMessageHash: sourceMessageHash,
@@ -334,6 +340,7 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       processingStatus: processingStatus,
       aiConfidence: aiParsed?.parsed.confidence,
       aiModel: aiParsed != null ? AppConstants.claudeSmsFastModel : null,
+      creditCardAccountId: linkedCreditCardAccount?.id,
     );
 
     // Mark processed before writing to Firestore so a concurrent isolate
@@ -353,9 +360,28 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
           : -resolvedAmount;
       adjustments.add(BalanceAdjustment(accountId: resolvedAccountId, delta: delta));
     }
+
+    // Credit-card purchases grow outstanding; bill payments shrink it. This
+    // never double-counts against the bank balance, since affectsBalance is
+    // already false for the creditCard payment mode on the purchase leg —
+    // a payment, on the other hand, genuinely does debit the paying bank
+    // account (captured above via affectsBalance/resolvedAccountId) while
+    // separately reducing the card's own outstanding here.
+    final creditCardAdjustments = <CreditCardAdjustment>[];
+    if (linkedCreditCardAccount != null) {
+      if (txnCategory == tx_model.TxnCategory.creditCardPurchase) {
+        creditCardAdjustments.add(CreditCardAdjustment(
+            creditCardAccountId: linkedCreditCardAccount.id, delta: resolvedAmount));
+      } else if (txnCategory == tx_model.TxnCategory.creditCardPayment) {
+        creditCardAdjustments.add(CreditCardAdjustment(
+            creditCardAccountId: linkedCreditCardAccount.id, delta: -resolvedAmount));
+      }
+    }
+
     final saved = await firestoreService.createTransactionWithBalanceUpdate(
       transaction,
       balanceAdjustments: adjustments,
+      creditCardAdjustments: creditCardAdjustments,
     );
 
     final currency = accounts.isNotEmpty ? accounts.first.currency : 'INR';

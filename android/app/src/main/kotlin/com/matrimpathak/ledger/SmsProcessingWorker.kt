@@ -87,6 +87,7 @@ class SmsProcessingWorker(
 
             val accounts = fetchAccounts(db, uid)
             val paymentModes = fetchPaymentModes(db, uid)
+            val creditCardAccounts = fetchCreditCardAccounts(db, uid)
 
             val txDate = Date(smsTimestamp)
             val sourceMessageHash = computeSmsHash(smsBody)
@@ -134,6 +135,10 @@ class SmsProcessingWorker(
             val resolvedPaymentModeId = aiParsed?.paymentModeId ?: local.matchedPaymentModeId
             val modeType = paymentModes.firstOrNull { it["id"] == resolvedPaymentModeId }?.get("type") as? String
             val affectsBalance = modeType != "creditCard" && modeType != "cash"
+            val linkedCreditCardAccountId = if (modeType == "creditCard") {
+                creditCardAccounts.firstOrNull { it["paymentModeId"] == resolvedPaymentModeId }
+                    ?.get("id") as? String
+            } else null
 
             val categories = fetchCategories(db, uid)
             val categoryId = resolveOrCreateCategory(aiParsed?.categorySlug, categories, uid, db)
@@ -168,6 +173,7 @@ class SmsProcessingWorker(
                 put("processingStatus", processingStatus)
                 put("aiConfidence", aiParsed?.confidence)
                 put("aiModel", if (aiParsed != null) "claude-haiku-4-5-20251001" else null)
+                put("creditCardAccountId", linkedCreditCardAccountId)
             }
 
             // Mark processed before writing so a concurrent isolate doesn't duplicate.
@@ -183,6 +189,24 @@ class SmsProcessingWorker(
                             .collection("accounts").document(resolvedAccountId),
                         "balance", FieldValue.increment(delta),
                     )
+                }
+                // Credit-card purchases grow outstanding; bill payments shrink
+                // it — never double-counted against the bank balance, since
+                // affectsBalance is already false for the creditCard payment
+                // mode on the purchase leg (mirrors sms_service.dart).
+                if (linkedCreditCardAccountId != null) {
+                    val outstandingDelta = when (txnCategory) {
+                        "creditCardPurchase" -> resolvedAmount
+                        "creditCardPayment" -> -resolvedAmount
+                        else -> null
+                    }
+                    if (outstandingDelta != null) {
+                        transaction.update(
+                            db.collection("users").document(uid)
+                                .collection("creditCardAccounts").document(linkedCreditCardAccountId),
+                            "currentOutstanding", FieldValue.increment(outstandingDelta),
+                        )
+                    }
                 }
             }.await()
 
@@ -240,6 +264,13 @@ class SmsProcessingWorker(
     private suspend fun fetchCategories(db: FirebaseFirestore, uid: String) =
         withContext(Dispatchers.IO) {
             db.collection("users").document(uid).collection("categories")
+                .get().await().documents
+                .mapNotNull { doc -> doc.data?.toMutableMap()?.also { it["id"] = doc.id } }
+        }
+
+    private suspend fun fetchCreditCardAccounts(db: FirebaseFirestore, uid: String) =
+        withContext(Dispatchers.IO) {
+            db.collection("users").document(uid).collection("creditCardAccounts")
                 .get().await().documents
                 .mapNotNull { doc -> doc.data?.toMutableMap()?.also { it["id"] = doc.id } }
         }

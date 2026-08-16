@@ -158,3 +158,28 @@ test('non-transaction subcollections keep the original unconditional owner-write
     db.doc('users/alice/merchants/uber').set({ displayName: 'Uber' }),
   );
 });
+
+test('credit card account writes require the owner and numeric outstanding/limit', async () => {
+  const db = testEnv.authenticatedContext('alice').firestore();
+
+  await assertSucceeds(
+    db.doc('users/alice/creditCardAccounts/card-1').set({
+      userId: 'alice',
+      title: 'HDFC Regalia',
+      currentOutstanding: 18450,
+      creditLimit: 100000,
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/creditCardAccounts/card-bad-owner').set({
+      userId: 'bob',
+      currentOutstanding: 0,
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/creditCardAccounts/card-non-numeric').set({
+      userId: 'alice',
+      currentOutstanding: '18450',
+    }),
+  );
+});

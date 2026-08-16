@@ -11,12 +11,15 @@ service cloud.firestore {
         allow read, delete: if request.auth != null && request.auth.uid == uid;
 
         // Field-level validation on top of the owner check. Scoped to the
-        // 'transactions' subcollection only — everything else keeps the
-        // original unconditional owner-write behavior. Fields are validated
-        // only when present so older/partial writes are never rejected.
+        // 'transactions' and 'creditCardAccounts' subcollections —
+        // everything else keeps the original unconditional owner-write
+        // behavior. Fields are validated only when present so older/partial
+        // writes are never rejected.
         allow create, update: if request.auth != null && request.auth.uid == uid &&
           (subcollection != 'transactions' ||
-            isValidTransactionWrite(request.resource.data, uid));
+            isValidTransactionWrite(request.resource.data, uid)) &&
+          (subcollection != 'creditCardAccounts' ||
+            isValidCreditCardAccountWrite(request.resource.data, uid));
       }
     }
 
@@ -34,6 +37,12 @@ service cloud.firestore {
         (!('processingStatus' in data) || data.processingStatus in [
           'local', 'needsAiReview', 'aiProcessed', 'confirmed', 'rejected'
         ]);
+    }
+
+    function isValidCreditCardAccountWrite(data, ownerId) {
+      return data.userId == ownerId &&
+        (!('currentOutstanding' in data) || data.currentOutstanding is number) &&
+        (!('creditLimit' in data) || data.creditLimit is number);
     }
   }
 }

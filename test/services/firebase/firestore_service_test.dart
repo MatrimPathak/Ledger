@@ -275,6 +275,105 @@ void main() {
     });
   });
 
+  group('FirestoreService credit card accounting', () {
+    test('a sequence of purchases and payments keeps currentOutstanding correct',
+        () async {
+      final firestore = FakeFirebaseFirestore();
+      final service = FirestoreService(firestore: firestore);
+      final cardRef = firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('creditCardAccounts')
+          .doc('card-1');
+      await cardRef.set({'userId': 'user-1', 'currentOutstanding': 0.0});
+
+      // Purchase ₹1500
+      await service.createTransactionWithBalanceUpdate(
+        _newTransaction(amount: 1500),
+        creditCardAdjustments: const [
+          CreditCardAdjustment(creditCardAccountId: 'card-1', delta: 1500),
+        ],
+      );
+      expect((await cardRef.get()).data()!['currentOutstanding'], 1500);
+
+      // Purchase ₹2000
+      await service.createTransactionWithBalanceUpdate(
+        _newTransaction(amount: 2000),
+        creditCardAdjustments: const [
+          CreditCardAdjustment(creditCardAccountId: 'card-1', delta: 2000),
+        ],
+      );
+      expect((await cardRef.get()).data()!['currentOutstanding'], 3500);
+
+      // Bill payment of ₹3500 — outstanding returns to zero
+      await service.createTransactionWithBalanceUpdate(
+        _newTransaction(amount: 3500),
+        creditCardAdjustments: const [
+          CreditCardAdjustment(creditCardAccountId: 'card-1', delta: -3500),
+        ],
+      );
+      expect((await cardRef.get()).data()!['currentOutstanding'], 0.0);
+    });
+
+    test('a credit card purchase never touches the linked bank account balance',
+        () async {
+      final firestore = FakeFirebaseFirestore();
+      final service = FirestoreService(firestore: firestore);
+      final accounts = firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('accounts');
+      await accounts.doc('checking').set({'balance': 1000});
+      final cardRef = firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('creditCardAccounts')
+          .doc('card-1');
+      await cardRef.set({'userId': 'user-1', 'currentOutstanding': 0.0});
+
+      // No balanceAdjustments passed — a credit-card purchase's
+      // affectsBalance is false, mirroring sms_service.dart's behavior.
+      await service.createTransactionWithBalanceUpdate(
+        _newTransaction(amount: 500),
+        creditCardAdjustments: const [
+          CreditCardAdjustment(creditCardAccountId: 'card-1', delta: 500),
+        ],
+      );
+
+      expect((await accounts.doc('checking').get()).data()!['balance'], 1000);
+      expect((await cardRef.get()).data()!['currentOutstanding'], 500);
+    });
+
+    test('deleting a purchase transaction reverses the outstanding adjustment',
+        () async {
+      final firestore = FakeFirebaseFirestore();
+      final service = FirestoreService(firestore: firestore);
+      final cardRef = firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('creditCardAccounts')
+          .doc('card-1');
+      await cardRef.set({'userId': 'user-1', 'currentOutstanding': 0.0});
+
+      final created = await service.createTransactionWithBalanceUpdate(
+        _newTransaction(amount: 800),
+        creditCardAdjustments: const [
+          CreditCardAdjustment(creditCardAccountId: 'card-1', delta: 800),
+        ],
+      );
+      expect((await cardRef.get()).data()!['currentOutstanding'], 800);
+
+      await service.deleteTransactionWithBalanceUpdate(
+        'user-1',
+        created.id,
+        creditCardAdjustments: const [
+          CreditCardAdjustment(creditCardAccountId: 'card-1', delta: -800),
+        ],
+      );
+      expect((await cardRef.get()).data()!['currentOutstanding'], 0.0);
+    });
+  });
+
   group('FirestoreService dedup checks', () {
     test('transactionExistsByExternalRef finds a matching reference number',
         () async {

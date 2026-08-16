@@ -67,15 +67,30 @@ final analyticsInsightsProvider =
   return results;
 });
 
+/// Transaction categories that move money between the user's own
+/// accounts/instruments rather than representing real spend or income —
+/// excluded from every analytics aggregate so a credit-card bill payment or
+/// an account-to-account transfer never inflates (or deflates) the numbers
+/// Claude reasons about.
+const _nonSpendTxnCategories = {
+  app_model.TxnCategory.transfer,
+  app_model.TxnCategory.creditCardPayment,
+  app_model.TxnCategory.adjustment,
+};
+
 @visibleForTesting
 List<Map<String, dynamic>> buildAnalyticsSummary(
     List<app_model.Transaction> transactions) {
   double totalExpense = 0;
   double totalIncome = 0;
+  var countedTransactions = 0;
   final categoryTotals = <String, double>{};
   final merchantCounts = <String, int>{};
 
   for (final tx in transactions) {
+    if (_nonSpendTxnCategories.contains(tx.txnCategory)) continue;
+    countedTransactions++;
+
     if (tx.type == app_model.TransactionType.expense) {
       totalExpense += tx.amount;
       categoryTotals[tx.categoryId] =
@@ -95,7 +110,7 @@ List<Map<String, dynamic>> buildAnalyticsSummary(
       'savingsRate': totalIncome > 0
           ? ((totalIncome - totalExpense) / totalIncome)
           : 0,
-      'transactionCount': transactions.length,
+      'transactionCount': countedTransactions,
       'categoryBreakdown': categoryTotals.entries
           .map((e) => {'categoryId': e.key, 'total': e.value})
           .toList(),
