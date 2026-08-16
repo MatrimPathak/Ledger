@@ -17,6 +17,7 @@ import '../../features/transactions/screens/add_transaction_screen.dart';
 import '../../features/transactions/screens/transaction_detail_screen.dart';
 import '../../features/analytics/screens/analytics_screen.dart';
 import '../../features/settings/screens/settings_screen.dart';
+import '../../features/settings/screens/notification_access_screen.dart';
 import '../../widgets/main_shell.dart';
 import '../../models/account.dart';
 import '../../models/payment_mode.dart';
@@ -153,6 +154,10 @@ final routerProvider = Provider<GoRouter>((ref) {
           if (mode is! PaymentMode) return const AccountsScreen();
           return EditPaymentModeScreen(mode: mode);
         },
+      ),
+      GoRoute(
+        path: '/notification-access',
+        builder: (_, __) => const NotificationAccessScreen(),
       ),
     ],
   );

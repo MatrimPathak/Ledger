@@ -5,6 +5,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -53,6 +54,43 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     } else {
                         result.error("INVALID_ARGS", "key and value are required", null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
+        EventChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.matrimpathak.ledger/notification_events"
+        ).setStreamHandler(object : EventChannel.StreamHandler {
+            override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                NotificationEventBridge.attach(events)
+            }
+
+            override fun onCancel(arguments: Any?) {
+                NotificationEventBridge.attach(null)
+            }
+        })
+
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.matrimpathak.ledger/notification_access"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "isAccessGranted" -> {
+                    val enabledListeners = Settings.Secure.getString(
+                        contentResolver,
+                        "enabled_notification_listeners"
+                    ) ?: ""
+                    result.success(enabledListeners.contains(packageName))
+                }
+                "openSettings" -> {
+                    try {
+                        startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        result.success(null)
+                    } catch (e: Exception) {
+                        result.error("NO_SETTINGS", "Notification listener settings unavailable", null)
                     }
                 }
                 else -> result.notImplemented()

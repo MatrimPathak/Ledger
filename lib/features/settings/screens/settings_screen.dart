@@ -179,6 +179,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 subtitle: 'Required for AI insights',
                 onTap: () => _editApiKey(context),
               ),
+              // Smart detection
+              _SectionHeader('Smart Detection'),
+              _SettingsTile(
+                icon: Icons.notifications_active_outlined,
+                title: 'Notification Access',
+                subtitle: 'Optional — suggest merchants from payment-app notifications',
+                onTap: () => context.push('/notification-access'),
+              ),
               // Data
               _SectionHeader('Data'),
               _SettingsTile(
