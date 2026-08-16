@@ -5,30 +5,14 @@ import '../../core/constants/app_constants.dart';
 import '../../models/account.dart';
 import '../../models/payment_mode.dart';
 
+export '../../core/utils/sms_redaction.dart' show redactSensitiveDigits;
+
 // Strip markdown code fences that models return despite being asked not to.
 String _stripMarkdown(String text) {
   final stripped = text.trim();
   final fence = RegExp(r'^```(?:json)?\s*([\s\S]*?)```$', multiLine: false);
   final match = fence.firstMatch(stripped);
   return match != null ? match.group(1)!.trim() : stripped;
-}
-
-/// Masks digit runs of 6+ characters (account numbers, balance figures)
-/// that appear near account/balance keywords, so a medium-confidence AI
-/// request only transmits enough of the SMS to resolve merchant/category
-/// ambiguity — not the sensitive figures the local parser didn't need
-/// either. Short last-4-digit card/account references (already masked with
-/// "XX" by the bank) are left visible since they carry little exposure on
-/// their own and can help the model disambiguate the instrument.
-String redactSensitiveDigits(String smsBody) {
-  final keywordProximity = RegExp(
-    r'((?:a\/?c|acct|account|bal(?:ance)?)[^\d]{0,15})([0-9,]{6,})',
-    caseSensitive: false,
-  );
-  return smsBody.replaceAllMapped(
-    keywordProximity,
-    (m) => '${m.group(1)}${'•' * (m.group(2)?.length ?? 6)}',
-  );
 }
 
 class ParsedSmsTransaction {

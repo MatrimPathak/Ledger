@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:another_telephony/telephony.dart';
 import 'package:collection/collection.dart';
 import 'package:crypto/crypto.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -172,7 +173,7 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
   }
 
   await NotificationService.initialize();
-  await NotificationService.showProcessingNotification(body);
+  await NotificationService.showProcessingNotification();
 
   try {
     final uid = resolveBackgroundSmsUid(
@@ -224,7 +225,17 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     // full SMS, same shape as before this rewrite.
     ClaudeParsedResult? aiParsed;
     if (!localResult.isHighConfidence) {
-      final apiKey = prefs.getString(AppConstants.prefKeyClaudeApiKey) ??
+      // This handler only ever runs with the Flutter engine alive
+      // (`listenInBackground: false` in SmsService.startListening — true
+      // background processing is the native Kotlin pipeline), so the
+      // Keystore-backed secure storage used everywhere else in the
+      // foreground app is available here too. The plaintext prefs read is
+      // a fallback only, for any value written before that migration.
+      const secureStorage = FlutterSecureStorage();
+      final secureKey =
+          await secureStorage.read(key: AppConstants.prefKeyClaudeApiKey);
+      final apiKey = secureKey ??
+          prefs.getString(AppConstants.prefKeyClaudeApiKey) ??
           AppConstants.claudeApiKeyPlaceholder;
       if (apiKey != AppConstants.claudeApiKeyPlaceholder && apiKey.isNotEmpty) {
         final claudeService = ClaudeService(apiKey);
@@ -327,7 +338,15 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       accountId: resolvedAccountId ?? '',
       paymentModeId: resolvedPaymentModeId,
       source: tx_model.TransactionSource.sms,
-      rawSms: body,
+      // Once a transaction reaches `confirmed` (here: local parsing was
+      // high-confidence enough to skip review entirely), the raw SMS has
+      // served its purpose and sensitive digit-runs are redacted before
+      // ever being written to Firestore — not stored raw and cleaned up
+      // later. Anything not yet confirmed keeps the full text so the
+      // review UI can still show "why did the app extract this?".
+      rawSms: processingStatus == tx_model.TxnProcessingStatus.confirmed
+          ? redactSensitiveDigits(body)
+          : body,
       createdAt: now,
       affectsBalance: affectsBalance,
       merchantConfidence: localResult.isHighConfidence ? localResult.confidence : null,

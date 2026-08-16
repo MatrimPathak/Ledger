@@ -83,11 +83,6 @@ class SettingsNotifier extends StateNotifier<SettingsState> {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(AppConstants.prefKeyCorrelationEnabled, value);
   }
-
-  Future<void> saveApiKey(String key) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(AppConstants.prefKeyClaudeApiKey, key);
-  }
 }
 
 final settingsProvider =

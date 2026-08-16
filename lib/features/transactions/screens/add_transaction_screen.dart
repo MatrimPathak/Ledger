@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/utils/payment_mode_filters.dart';
+import '../../../core/utils/sms_redaction.dart';
 import '../../../models/account.dart';
 import '../../../models/category.dart';
 import '../../../models/payment_mode.dart';
@@ -90,7 +91,14 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
       final notificationsOn = ref.read(settingsProvider).notificationsEnabled;
 
       if (widget.editTransaction != null) {
-        // Edit mode
+        // Edit mode. Reviewing and saving an SMS-derived transaction is the
+        // user's confirmation of it — once it reaches `confirmed`, the raw
+        // SMS has served its "why did the app extract this?" purpose and
+        // sensitive digit-runs (account numbers/balances) are redacted in
+        // place, same as the always-high-confidence path in sms_service.dart.
+        final needsConfirmRedaction = widget.editTransaction!.processingStatus !=
+                TxnProcessingStatus.confirmed &&
+            widget.editTransaction!.rawSms != null;
         final updated = widget.editTransaction!.copyWith(
           title: _titleCtrl.text.trim(),
           amount: amount,
@@ -101,6 +109,10 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
           paymentModeId: _paymentModeId,
           notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
           affectsBalance: newAffectsBalance,
+          processingStatus: TxnProcessingStatus.confirmed,
+          rawSms: needsConfirmRedaction
+              ? () => redactSensitiveDigits(widget.editTransaction!.rawSms!)
+              : null,
         );
 
         // Adjust balance: handle account change and affectsBalance transitions
