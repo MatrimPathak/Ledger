@@ -32,36 +32,47 @@ exports.reconcileBalances = onCall(async (request) => {
   const db = admin.firestore();
   const userRef = db.collection('users').doc(uid);
 
-  const [cardsSnap, txSnap] = await Promise.all([
-    userRef.collection('creditCardAccounts').get(),
-    userRef.collection('transactions').get(),
-  ]);
-
-  const transactions = txSnap.docs.map((doc) => ({
-    id: doc.id,
-    ...doc.data(),
-  }));
+  const cardsSnap = await userRef.collection('creditCardAccounts').get();
 
   const results = [];
   const batch = db.batch();
   let batchHasWrites = false;
 
-  for (const cardDoc of cardsSnap.docs) {
-    const card = { id: cardDoc.id, ...cardDoc.data() };
-    const result = reconcileCreditCardAccount(card, transactions);
-    results.push(result);
+  // Query per card rather than loading the entire transactions collection
+  // into memory — that collection grows unbounded for an SMS-ingesting
+  // ledger, while a card only ever needs the (typically small) subset of
+  // transactions linked to it. An equality filter on creditCardAccountId
+  // needs no composite index, and .select() limits each doc read to just
+  // the two fields reconciliation actually uses.
+  await Promise.all(
+    cardsSnap.docs.map(async (cardDoc) => {
+      const card = { id: cardDoc.id, ...cardDoc.data() };
+      const linkedSnap = await userRef
+        .collection('transactions')
+        .where('creditCardAccountId', '==', card.id)
+        .select('txnCategory', 'amount')
+        .get();
+      const linked = linkedSnap.docs.map((doc) => ({
+        id: doc.id,
+        creditCardAccountId: card.id,
+        ...doc.data(),
+      }));
 
-    const alreadyFlagged = card.needsReconciliation === true;
-    if (!result.matches && !alreadyFlagged) {
-      batch.update(cardDoc.ref, { needsReconciliation: true });
-      batchHasWrites = true;
-    } else if (result.matches && alreadyFlagged) {
-      // Clear a stale flag once the numbers agree again — still never
-      // touches the outstanding value itself, only the flag.
-      batch.update(cardDoc.ref, { needsReconciliation: false });
-      batchHasWrites = true;
-    }
-  }
+      const result = reconcileCreditCardAccount(card, linked);
+      results.push(result);
+
+      const alreadyFlagged = card.needsReconciliation === true;
+      if (!result.matches && !alreadyFlagged) {
+        batch.update(cardDoc.ref, { needsReconciliation: true });
+        batchHasWrites = true;
+      } else if (result.matches && alreadyFlagged) {
+        // Clear a stale flag once the numbers agree again — still never
+        // touches the outstanding value itself, only the flag.
+        batch.update(cardDoc.ref, { needsReconciliation: false });
+        batchHasWrites = true;
+      }
+    }),
+  );
 
   if (batchHasWrites) {
     await batch.commit();

@@ -48,7 +48,7 @@
       "requireKeywords": ["debited"],
       "excludeKeywords": ["credited"],
       "refNumberRegex": "upi[:\\s]*ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "(?:trf to|paid to|to vpa|to)\\s+([a-z0-9@.\\-_ ]{2,40}?)(?:\\s+on\\b|\\s+upi\\b|\\.|,|$)"
+      "merchantRegex": "\\b(?:trf to|paid to|to vpa|to)\\s+([a-z0-9@.\\-_ ]{2,40}?)(?:\\s+on\\b|\\s+upi\\b|\\.|,|$)"
     },
     {
       "id": "upi_credit",
@@ -59,7 +59,7 @@
       "requireKeywords": ["credited"],
       "excludeKeywords": ["debited"],
       "refNumberRegex": "upi[:\\s]*ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "(?:trf from|received from|from vpa|from)\\s+([a-z0-9@.\\-_ ]{2,40}?)(?:\\s+on\\b|\\s+upi\\b|\\.|,|$)"
+      "merchantRegex": "\\b(?:trf from|received from|from vpa|from)\\s+([a-z0-9@.\\-_ ]{2,40}?)(?:\\s+on\\b|\\s+upi\\b|\\.|,|$)"
     },
     {
       "id": "credit_card_bill_payment",
@@ -81,7 +81,7 @@
       "requireKeywords": ["spent", "purchase", "used for", "txn of"],
       "excludeKeywords": ["bill payment received", "payment received", "bill paid"],
       "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "(?:at|on)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
+      "merchantRegex": "\\b(?:at|on)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
     },
     {
       "id": "atm_withdrawal",
@@ -103,7 +103,7 @@
       "requireKeywords": [],
       "excludeKeywords": [],
       "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "(?:from|by)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
+      "merchantRegex": "\\b(?:from|by)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
     },
     {
       "id": "bank_debit_generic",
@@ -114,7 +114,7 @@
       "requireKeywords": [],
       "excludeKeywords": ["credited"],
       "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "(?:to|towards)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
+      "merchantRegex": "\\b(?:to|towards)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
     },
     {
       "id": "bank_credit_generic",
@@ -125,7 +125,7 @@
       "requireKeywords": [],
       "excludeKeywords": ["debited"],
       "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "(?:from|by)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
+      "merchantRegex": "\\b(?:from|by)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
     }
   ]
 }

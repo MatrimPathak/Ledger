@@ -29,12 +29,40 @@ void main() {
           .where((f) => f.path.endsWith('.dart') || f.path.endsWith('.kt'));
       for (final file in files) {
         final lines = file.readAsLinesSync();
-        for (var i = 0; i < lines.length; i++) {
+        var i = 0;
+        while (i < lines.length) {
           final line = lines[i];
-          if (!loggingCall.hasMatch(line)) continue;
-          if (sensitiveIdentifiers.any(line.contains)) {
-            offenders.add('${file.path}:${i + 1}: ${line.trim()}');
+          if (!loggingCall.hasMatch(line)) {
+            i++;
+            continue;
           }
+          // Accumulate every line of this call through its closing
+          // parenthesis — a multi-line call can place a sensitive
+          // identifier on a later argument line, past what a single-line
+          // check would see.
+          final callLines = <String>[];
+          var depth = 0;
+          var started = false;
+          var j = i;
+          while (j < lines.length) {
+            final l = lines[j];
+            for (final ch in l.split('')) {
+              if (ch == '(') {
+                depth++;
+                started = true;
+              } else if (ch == ')') {
+                depth--;
+              }
+            }
+            callLines.add(l);
+            j++;
+            if (started && depth <= 0) break;
+          }
+          final callText = callLines.join('\n');
+          if (sensitiveIdentifiers.any(callText.contains)) {
+            offenders.add('${file.path}:${i + 1}: ${callLines.first.trim()}');
+          }
+          i = j;
         }
       }
     }

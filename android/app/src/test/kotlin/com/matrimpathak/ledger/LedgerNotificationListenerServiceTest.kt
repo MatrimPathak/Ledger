@@ -25,6 +25,12 @@ class LedgerNotificationListenerServiceTest {
     fun `returns null when no amount is present`() {
         assertNull(LedgerNotificationListenerService.extractAmount("You have a new message"))
         assertNull(LedgerNotificationListenerService.extractAmount(""))
+        assertNull(LedgerNotificationListenerService.extractAmount("Hours 250 logged this week"))
+    }
+
+    @Test
+    fun `does not classify substring keyword matches as a direction`() {
+        assertEquals("unknown", LedgerNotificationListenerService.guessEventType("Your talk was presented"))
     }
 
     @Test

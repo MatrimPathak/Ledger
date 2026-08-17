@@ -1,6 +1,5 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../providers/auth_provider.dart';
@@ -54,22 +53,6 @@ Future<String?> resolveAuthRedirect({
   }
 
   return null;
-}
-
-/// Notifies GoRouter's [refreshListenable] whenever the given stream emits,
-/// so auth-state changes can trigger a redirect re-evaluation.
-class AuthStateRefreshNotifier extends ChangeNotifier {
-  AuthStateRefreshNotifier(Stream<Object?> stream) {
-    _subscription = stream.listen((_) => notifyListeners());
-  }
-
-  late final StreamSubscription<Object?> _subscription;
-
-  @override
-  void dispose() {
-    _subscription.cancel();
-    super.dispose();
-  }
 }
 
 final routerProvider = Provider<GoRouter>((ref) {

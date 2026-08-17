@@ -171,11 +171,13 @@ class LocalSmsParser {
   }
 
   bool _ruleMatches(Map<String, dynamic> rule, String lower) {
-    final keywords = (rule['keywords'] as List).cast<String>();
-    final requireKeywords = (rule['requireKeywords'] as List).cast<String>();
-    final excludeKeywords = (rule['excludeKeywords'] as List).cast<String>();
+    final keywords = (rule['keywords'] as List?)?.cast<String>() ?? const [];
+    final requireKeywords =
+        (rule['requireKeywords'] as List?)?.cast<String>() ?? const [];
+    final excludeKeywords =
+        (rule['excludeKeywords'] as List?)?.cast<String>() ?? const [];
 
-    if (!keywords.any(lower.contains)) return false;
+    if (keywords.isEmpty || !keywords.any(lower.contains)) return false;
     if (requireKeywords.isNotEmpty && !requireKeywords.any(lower.contains)) {
       return false;
     }

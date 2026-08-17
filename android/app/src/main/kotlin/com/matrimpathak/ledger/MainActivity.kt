@@ -1,5 +1,7 @@
 package com.matrimpathak.ledger
 
+import android.app.NotificationManager
+import android.content.ComponentName
 import android.content.Intent
 import android.os.PowerManager
 import android.provider.Settings
@@ -88,11 +90,7 @@ class MainActivity : FlutterActivity() {
         ).setMethodCallHandler { call, result ->
             when (call.method) {
                 "isAccessGranted" -> {
-                    val enabledListeners = Settings.Secure.getString(
-                        contentResolver,
-                        "enabled_notification_listeners"
-                    ) ?: ""
-                    result.success(enabledListeners.contains(packageName))
+                    result.success(isNotificationListenerAccessGranted())
                 }
                 "openSettings" -> {
                     try {
@@ -105,5 +103,21 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    // A plain substring check on the enabled-listeners string can false-
+    // positive on a different service within the same package (or another
+    // package whose flattened component happens to contain this one's name
+    // as a substring). Compare the declared component identity instead.
+    private fun isNotificationListenerAccessGranted(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O_MR1) {
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            val target = ComponentName(this, LedgerNotificationListenerService::class.java)
+            return nm.isNotificationListenerAccessGranted(target)
+        }
+        val target = ComponentName(this, LedgerNotificationListenerService::class.java)
+        val flat = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")
+            ?: return false
+        return flat.split(":").any { ComponentName.unflattenFromString(it) == target }
     }
 }

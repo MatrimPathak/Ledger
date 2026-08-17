@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ledger/core/router/app_router.dart';
 import 'package:ledger/models/user_profile.dart';
@@ -67,28 +65,6 @@ void main() {
       );
 
       expect(redirect, '/home');
-    });
-  });
-
-  group('AuthStateRefreshNotifier', () {
-    test('notifies on auth stream changes until disposed', () async {
-      final controller = StreamController<Object?>.broadcast();
-      final notifier = AuthStateRefreshNotifier(controller.stream);
-      var notifications = 0;
-      notifier.addListener(() => notifications++);
-
-      controller.add(null);
-      await pumpEventQueue();
-
-      expect(notifications, 1);
-
-      notifier.dispose();
-      controller.add(null);
-      await pumpEventQueue();
-
-      expect(notifications, 1);
-
-      await controller.close();
     });
   });
 }

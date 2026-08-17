@@ -24,7 +24,15 @@ function computeCreditCardOutstanding(linkedTransactions) {
   for (const tx of linkedTransactions) {
     if (tx.txnCategory === 'creditCardPurchase') {
       outstanding += tx.amount || 0;
-    } else if (tx.txnCategory === 'creditCardPayment') {
+    } else if (
+      tx.txnCategory === 'creditCardPayment' ||
+      // A refund credited back to a card lowers its outstanding by the
+      // same sign as a payment — see add_transaction_screen.dart's
+      // newCardDelta/oldCardDelta, which applies -amount for both
+      // categories. Omitting refund here made reconcileBalances flag a
+      // false mismatch on every card with a refund transaction.
+      tx.txnCategory === 'refund'
+    ) {
       outstanding -= tx.amount || 0;
     }
   }

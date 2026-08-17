@@ -17,14 +17,28 @@ test('computeCreditCardOutstanding sums purchases and subtracts payments', () =>
   assert.equal(outstanding, 0);
 });
 
-test('computeCreditCardOutstanding ignores unrelated transaction categories', () => {
+test('computeCreditCardOutstanding ignores transaction categories that never touch a card', () => {
   const outstanding = computeCreditCardOutstanding([
     { txnCategory: 'creditCardPurchase', amount: 1000 },
     { txnCategory: 'expense', amount: 500 },
-    { txnCategory: 'refund', amount: 200 },
+    { txnCategory: 'adjustment', amount: 300 },
   ]);
 
   assert.equal(outstanding, 1000);
+});
+
+test('computeCreditCardOutstanding subtracts refund the same as a payment', () => {
+  // add_transaction_screen.dart applies -amount to currentOutstanding for
+  // both creditCardPayment and refund (income against a credit card, e.g.
+  // a merchant refund credited back to the card) — the recompute here
+  // must agree, or every card with a refund transaction would show a
+  // false needsReconciliation mismatch.
+  const outstanding = computeCreditCardOutstanding([
+    { txnCategory: 'creditCardPurchase', amount: 1000 },
+    { txnCategory: 'refund', amount: 200 },
+  ]);
+
+  assert.equal(outstanding, 800);
 });
 
 test('reconcileCreditCardAccount matches when the stored value agrees', () => {

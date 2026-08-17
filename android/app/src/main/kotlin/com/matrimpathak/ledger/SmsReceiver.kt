@@ -66,7 +66,16 @@ class SmsReceiver : BroadcastReceiver() {
     // second hand-copied one drifting from the Dart/JSON version.
     private fun looksLikeBankSms(context: Context, body: String): Boolean {
         val lower = body.lowercase()
-        val rules = RulesCache.get(context)
+        // Asset I/O or JSON parsing failure here must not crash this
+        // manifest-registered receiver. Treat it as "doesn't look like a
+        // bank SMS this one time" — RulesCache doesn't cache failures, so
+        // the next SMS gets a fresh attempt rather than being permanently
+        // stuck.
+        val rules = try {
+            RulesCache.get(context)
+        } catch (_: Exception) {
+            return false
+        }
         val keywords = rules.optJSONArray("globalKeywords")
         val keywordsMatch = keywords != null &&
             (0 until keywords.length()).any { lower.contains(keywords.getString(it)) }

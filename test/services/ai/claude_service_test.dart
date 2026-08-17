@@ -422,7 +422,11 @@ void main() {
         }),
       );
 
-      expect(
+      // generateInsightsOrThrow returns a Future — expect() with throwsA
+      // doesn't await it, so a rejection could surface against a later,
+      // unrelated test (or be lost) instead of failing this one.
+      // expectLater does await it.
+      await expectLater(
         () => service.generateInsightsOrThrow(
           transactionSummary: const [],
           currency: 'INR',

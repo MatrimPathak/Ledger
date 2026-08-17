@@ -131,11 +131,20 @@ List<Map<String, dynamic>> buildAnalyticsSummary(
 /// already sent to Claude for insights — reuses the existing detection
 /// pipeline (`detectSubscriptions`) rather than issuing a second AI call or
 /// duplicating any logic.
+/// Cap on how many individual recurring-merchant entries are serialized
+/// into the Claude prompt payload — the four counts above already carry
+/// the full picture, so this only bounds prompt size/cost as a user's
+/// merchant count grows, not what Claude can reason about in aggregate.
+const _maxSubscriptionItemsInPrompt = 20;
+
 Map<String, dynamic> _buildSubscriptionsSummary(
     List<app_model.Transaction> transactions) {
   final detected = detectSubscriptions('_analytics', transactions);
   int countOf(sub_model.SubscriptionKind kind) =>
       detected.where((s) => s.kind == kind).length;
+
+  final items = detected.toList()
+    ..sort((a, b) => b.expectedAmount.compareTo(a.expectedAmount));
 
   return {
     'subscriptionCount': countOf(sub_model.SubscriptionKind.subscription),
@@ -144,7 +153,8 @@ Map<String, dynamic> _buildSubscriptionsSummary(
         countOf(sub_model.SubscriptionKind.recurringIncome),
     'recurringTransferCount':
         countOf(sub_model.SubscriptionKind.recurringTransfer),
-    'items': detected
+    'items': items
+        .take(_maxSubscriptionItemsInPrompt)
         .map((s) => {
               'name': s.displayName,
               'kind': s.kind.name,

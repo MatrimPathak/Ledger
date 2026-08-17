@@ -394,9 +394,9 @@ class _CorrelationSuggestionChipState
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: AppColors.indigo500.withOpacity(0.08),
+        color: AppColors.indigo500.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: AppColors.indigo500.withOpacity(0.3)),
+        border: Border.all(color: AppColors.indigo500.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
@@ -518,7 +518,7 @@ class _DetailRow extends StatelessWidget {
           Icon(icon,
               size: 18,
               color: iconColor ??
-                  theme.colorScheme.onSurface.withOpacity(0.6)),
+                  theme.colorScheme.onSurface.withValues(alpha: 0.6)),
           const SizedBox(width: 12),
           Expanded(
             child: Column(

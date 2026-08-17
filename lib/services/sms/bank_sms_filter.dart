@@ -16,22 +16,27 @@ class BankSmsFilter {
     final raw =
         await rootBundle.loadString('assets/sms_patterns/bank_patterns.json');
     final decoded = jsonDecode(raw) as Map<String, dynamic>;
-    _cachedKeywords = (decoded['globalKeywords'] as List).cast<String>();
-    _cachedWordBoundaryPatterns =
-        (decoded['globalWordBoundaryKeywords'] as List)
-            .cast<String>()
-            .map((w) => RegExp('\\b$w\\b'))
-            .toList();
+    _publish(decoded);
   }
 
   /// Test-only escape hatch to inject a rule set directly rather than
   /// loading it from the asset bundle.
-  static void debugLoadFrom(Map<String, dynamic> rules) {
-    _cachedKeywords = (rules['globalKeywords'] as List).cast<String>();
-    _cachedWordBoundaryPatterns = (rules['globalWordBoundaryKeywords'] as List)
+  static void debugLoadFrom(Map<String, dynamic> rules) => _publish(rules);
+
+  /// Builds both caches into locals first and only publishes them together.
+  /// [_ensureLoaded] treats a non-null [_cachedKeywords] as "already
+  /// loaded" and short-circuits on every later call — if the two caches
+  /// were assigned one at a time and building the second one threw, that
+  /// guard would permanently short-circuit with [_cachedWordBoundaryPatterns]
+  /// still null, and every later call would hit a null-check error.
+  static void _publish(Map<String, dynamic> rules) {
+    final keywords = (rules['globalKeywords'] as List).cast<String>();
+    final wordBoundaryPatterns = (rules['globalWordBoundaryKeywords'] as List)
         .cast<String>()
-        .map((w) => RegExp('\\b$w\\b'))
+        .map((w) => RegExp('\\b${RegExp.escape(w)}\\b'))
         .toList();
+    _cachedKeywords = keywords;
+    _cachedWordBoundaryPatterns = wordBoundaryPatterns;
   }
 
   static Future<bool> looksLikeBankSms(String body) async {

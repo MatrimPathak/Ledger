@@ -27,9 +27,14 @@ class Merchant {
   });
 
   /// Lowercased, punctuation-stripped key used for exact/near matching.
+  /// Uses Unicode property escapes (letters/marks/numbers in any script,
+  /// not just a-z0-9) so a non-Latin merchant name — e.g. Devanagari —
+  /// normalizes to its own key instead of collapsing to an empty string
+  /// that every other non-Latin merchant would also share.
   static String normalize(String name) {
     final lower = name.toLowerCase().trim();
-    final stripped = lower.replaceAll(RegExp(r'[^a-z0-9\s]'), '');
+    final stripped = lower.replaceAll(
+        RegExp(r'[^\p{L}\p{M}\p{N}\s]', unicode: true), '');
     return stripped.replaceAll(RegExp(r'\s+'), ' ').trim();
   }
 

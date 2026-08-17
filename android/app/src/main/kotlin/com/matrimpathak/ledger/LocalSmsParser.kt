@@ -113,10 +113,10 @@ class LocalSmsParser(private val rules: JSONObject) {
     }
 
     private fun ruleMatches(rule: JSONObject, lower: String): Boolean {
-        val keywords = rule.getJSONArray("keywords").toStringList()
-        val requireKeywords = rule.getJSONArray("requireKeywords").toStringList()
-        val excludeKeywords = rule.getJSONArray("excludeKeywords").toStringList()
-        if (keywords.none { lower.contains(it) }) return false
+        val keywords = rule.optJSONArray("keywords")?.toStringList() ?: emptyList()
+        val requireKeywords = rule.optJSONArray("requireKeywords")?.toStringList() ?: emptyList()
+        val excludeKeywords = rule.optJSONArray("excludeKeywords")?.toStringList() ?: emptyList()
+        if (keywords.isEmpty() || keywords.none { lower.contains(it) }) return false
         if (requireKeywords.isNotEmpty() && requireKeywords.none { lower.contains(it) }) return false
         if (excludeKeywords.any { lower.contains(it) }) return false
         return true

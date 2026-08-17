@@ -58,13 +58,44 @@ class _CreditCardDetailsBottomSheetState
     super.dispose();
   }
 
+  /// Parses a 1-31 day-of-month field, treating an out-of-range or
+  /// unparseable value the same as "not provided" rather than persisting a
+  /// value like 45 that `_ordinalSuffix` would later render as "45th".
+  int? _parseDay(String text) {
+    final value = int.tryParse(text.trim());
+    if (value == null || value < 1 || value > 31) return null;
+    return value;
+  }
+
   Future<void> _save() async {
+    final limitText = _limitCtrl.text.trim();
+    final limit = limitText.isEmpty ? 0.0 : double.tryParse(limitText);
+    if (limit == null || limit < 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Enter a valid credit limit')),
+      );
+      return;
+    }
+    final statementDayText = _statementDayCtrl.text.trim();
+    if (statementDayText.isNotEmpty && _parseDay(statementDayText) == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Statement day must be between 1 and 31')),
+      );
+      return;
+    }
+    final dueDayText = _dueDayCtrl.text.trim();
+    if (dueDayText.isNotEmpty && _parseDay(dueDayText) == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Due day must be between 1 and 31')),
+      );
+      return;
+    }
+
     setState(() => _saving = true);
     try {
       final firestoreService = ref.read(firestoreServiceProvider);
-      final limit = double.tryParse(_limitCtrl.text.trim()) ?? 0;
-      final statementDay = int.tryParse(_statementDayCtrl.text.trim());
-      final dueDay = int.tryParse(_dueDayCtrl.text.trim());
+      final statementDay = _parseDay(statementDayText);
+      final dueDay = _parseDay(dueDayText);
 
       final existing = widget.existing;
       if (existing != null) {

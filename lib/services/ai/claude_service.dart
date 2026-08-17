@@ -126,19 +126,31 @@ class ClaudeService {
   /// failures (timeout, connection errors) — never for a non-200 HTTP
   /// response, which is a real answer from the API, not a transient
   /// failure retrying would fix.
+  ///
+  /// The retry shares [timeout]'s overall budget rather than getting a
+  /// fresh one — applying the full timeout twice let one call block for
+  /// up to `timeout * 2 + retryDelay` (e.g. 62s on the 30s/2s defaults) on
+  /// a user-visible path (`generateInsightsOrThrow`), well past what the
+  /// caller asked for.
   Future<http.Response> _postWithRetry(
     Map<String, dynamic> body, {
     Duration timeout = const Duration(seconds: 30),
   }) async {
+    final deadline = DateTime.now().add(timeout);
     try {
       return await _postToClaude(body).timeout(timeout);
     } on TimeoutException {
       await Future.delayed(_retryDelay);
-      return await _postToClaude(body).timeout(timeout);
+      return await _postToClaude(body).timeout(_remaining(deadline));
     } on http.ClientException {
       await Future.delayed(_retryDelay);
-      return await _postToClaude(body).timeout(timeout);
+      return await _postToClaude(body).timeout(_remaining(deadline));
     }
+  }
+
+  Duration _remaining(DateTime deadline) {
+    final left = deadline.difference(DateTime.now());
+    return left > Duration.zero ? left : const Duration(milliseconds: 1);
   }
 
   Future<ParsedSmsTransaction?> parseSmsTransaction({

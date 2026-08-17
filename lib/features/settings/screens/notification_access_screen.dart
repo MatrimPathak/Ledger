@@ -91,7 +91,7 @@ class _NotificationAccessScreenState
                 borderRadius: BorderRadius.circular(16),
                 border: Border.all(
                   color: granted
-                      ? AppColors.incomeGreenDark.withOpacity(0.5)
+                      ? AppColors.incomeGreenDark.withValues(alpha: 0.5)
                       : theme.colorScheme.outline,
                 ),
               ),
@@ -106,7 +106,7 @@ class _NotificationAccessScreenState
                             : Icons.radio_button_unchecked,
                         color: granted
                             ? AppColors.incomeGreenDark
-                            : theme.colorScheme.onSurface.withOpacity(0.5),
+                            : theme.colorScheme.onSurface.withValues(alpha: 0.5),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
@@ -147,34 +147,27 @@ class _NotificationAccessScreenState
           ),
           const SizedBox(height: 16),
           Container(
-            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: theme.colorScheme.surfaceContainerHighest,
               borderRadius: BorderRadius.circular(16),
               border: Border.all(color: theme.colorScheme.outline),
             ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Suggest matches from notifications',
-                          style: theme.textTheme.titleMedium),
-                      Text(
-                        'Also requires notification access above to be granted.',
-                        style: theme.textTheme.bodySmall,
-                      ),
-                    ],
-                  ),
-                ),
-                Switch(
-                  value: settings.correlationEnabled,
-                  onChanged: (v) => ref
-                      .read(settingsProvider.notifier)
-                      .setCorrelationEnabled(v),
-                ),
-              ],
+            // SwitchListTile associates the title/subtitle with the
+            // control for screen readers (a bare Switch next to unrelated
+            // Text left the label unannounced) and expands the tap target
+            // to the whole row instead of just the small switch.
+            child: SwitchListTile(
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+              title: Text('Suggest matches from notifications',
+                  style: theme.textTheme.titleMedium),
+              subtitle: Text(
+                'Also requires notification access above to be granted.',
+                style: theme.textTheme.bodySmall,
+              ),
+              value: settings.correlationEnabled,
+              onChanged: (v) => ref
+                  .read(settingsProvider.notifier)
+                  .setCorrelationEnabled(v),
             ),
           ),
         ],
@@ -194,7 +187,7 @@ class _NotificationAccessScreenState
               width: 4,
               height: 4,
               decoration: BoxDecoration(
-                color: theme.colorScheme.onSurface.withOpacity(0.5),
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
                 shape: BoxShape.circle,
               ),
             ),

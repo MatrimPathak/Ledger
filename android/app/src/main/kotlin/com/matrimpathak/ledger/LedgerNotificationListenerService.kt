@@ -41,8 +41,12 @@ class LedgerNotificationListenerService : NotificationListenerService() {
     }
 
     companion object {
+        // Leading \b prevents "rs" from matching as a mid-word substring
+        // (e.g. the "rs" inside "hours") — no trailing \b, since "Rs." is a
+        // valid prefix and a boundary right after a period is not
+        // guaranteed when a space follows it before the digits.
         private val AMOUNT_REGEX =
-            Regex("(?:rs\\.?|inr|₹)\\s*([0-9][0-9,]*(?:\\.[0-9]{1,2})?)", RegexOption.IGNORE_CASE)
+            Regex("(?:\\b(?:rs\\.?|inr)|₹)\\s*([0-9][0-9,]*(?:\\.[0-9]{1,2})?)", RegexOption.IGNORE_CASE)
 
         private val DEBIT_KEYWORDS = listOf("paid", "sent", "debited", "spent")
         private val CREDIT_KEYWORDS = listOf("received", "credited", "refund")
@@ -55,9 +59,12 @@ class LedgerNotificationListenerService : NotificationListenerService() {
 
         fun guessEventType(text: String): String {
             val lower = text.lowercase()
-            if (DEBIT_KEYWORDS.any { lower.contains(it) }) return "debit"
-            if (CREDIT_KEYWORDS.any { lower.contains(it) }) return "credit"
+            if (DEBIT_KEYWORDS.any { containsWord(lower, it) }) return "debit"
+            if (CREDIT_KEYWORDS.any { containsWord(lower, it) }) return "credit"
             return "unknown"
         }
+
+        private fun containsWord(lower: String, word: String): Boolean =
+            Regex("\\b${Regex.escape(word)}\\b").containsMatchIn(lower)
     }
 }
