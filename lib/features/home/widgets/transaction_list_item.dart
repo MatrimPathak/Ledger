@@ -22,13 +22,21 @@ class TransactionListItem extends StatelessWidget {
     required this.onTap,
   });
 
+  static const _transferCategories = {
+    TxnCategory.transfer,
+    TxnCategory.creditCardPayment,
+  };
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final isTransfer = _transferCategories.contains(transaction.txnCategory);
     final isExpense = transaction.type == TransactionType.expense;
-    final amountColor =
-        isExpense ? AppColors.expenseRedDark : AppColors.incomeGreenDark;
-    final amountPrefix = isExpense ? '-' : '+';
+    final amountColor = isTransfer
+        ? theme.colorScheme.onSurface.withOpacity(0.7)
+        : (isExpense ? AppColors.expenseRedDark : AppColors.incomeGreenDark);
+    final amountPrefix = isTransfer ? '' : (isExpense ? '-' : '+');
+    final iconColor = isTransfer ? AppColors.indigo500 : (category?.color ?? AppColors.indigo500);
 
     return InkWell(
       onTap: onTap,
@@ -42,12 +50,12 @@ class TransactionListItem extends StatelessWidget {
               width: 44,
               height: 44,
               decoration: BoxDecoration(
-                color: (category?.color ?? AppColors.indigo500).withOpacity(0.15),
+                color: iconColor.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(14),
               ),
               child: Icon(
-                category?.icon ?? Icons.more_horiz,
-                color: category?.color ?? AppColors.indigo500,
+                isTransfer ? Icons.swap_horiz : (category?.icon ?? Icons.more_horiz),
+                color: iconColor,
                 size: 22,
               ),
             ),
@@ -66,15 +74,16 @@ class TransactionListItem extends StatelessWidget {
                   const SizedBox(height: 2),
                   Row(
                     children: [
-                      if (category != null)
-                        Text(
-                          category!.title,
-                          style: theme.textTheme.bodySmall,
-                        ),
-                      if (category != null && paymentMode != null)
+                      Text(
+                        isTransfer
+                            ? 'Transfer'
+                            : (category?.title ?? ''),
+                        style: theme.textTheme.bodySmall,
+                      ),
+                      if (!isTransfer && category != null && paymentMode != null)
                         Text(' · ',
                             style: theme.textTheme.bodySmall),
-                      if (paymentMode != null)
+                      if (!isTransfer && paymentMode != null)
                         Text(
                           paymentMode!.title,
                           style: theme.textTheme.bodySmall,

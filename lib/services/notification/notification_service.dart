@@ -67,7 +67,12 @@ class NotificationService {
 
   // ── SMS auto-detect notifications ─────────────────────────────────────────
 
-  static Future<void> showProcessingNotification(String smsPreview) async {
+  /// Ephemeral "working on it" indicator shown while a bank SMS is being
+  /// parsed in the background. Deliberately generic — the notification
+  /// shade is visible on the lock screen and to any other app with
+  /// notification-listener access, so no part of the SMS body (which may
+  /// contain account numbers, balances, or names) is ever shown here.
+  static Future<void> showProcessingNotification() async {
     if (!notificationsEnabled) return;
     const androidDetails = AndroidNotificationDetails(
       _smsChannelId,
@@ -80,8 +85,8 @@ class NotificationService {
     const details = NotificationDetails(android: androidDetails);
     await _plugin.show(
       0,
-      'Ledger — Processing bank SMS…',
-      smsPreview.length > 80 ? '${smsPreview.substring(0, 80)}…' : smsPreview,
+      'Ledger',
+      'Processing a bank message…',
       details,
     );
   }

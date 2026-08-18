@@ -46,6 +46,7 @@ app.*.map.json
 /android/app/release
 
 # Local secrets — never commit real keys
+# Copy .env.example to .env and fill in your own key. Never commit .env.
 .env
 android/app/google-services.json
 lib/firebase_options.dart

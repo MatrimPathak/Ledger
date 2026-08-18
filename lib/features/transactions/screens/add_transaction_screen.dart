@@ -5,16 +5,21 @@ import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/utils/payment_mode_filters.dart';
+import '../../../core/utils/sms_redaction.dart';
 import '../../../models/account.dart';
 import '../../../models/category.dart';
+import '../../../models/credit_card_account.dart';
 import '../../../models/payment_mode.dart';
 import '../../../models/transaction.dart';
 import '../../../providers/accounts_provider.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/categories_provider.dart';
+import '../../../providers/credit_card_accounts_provider.dart';
 import '../../../providers/firestore_provider.dart';
 import '../../../providers/payment_modes_provider.dart';
 import '../../../providers/settings_provider.dart';
+import '../../../services/firebase/firestore_service.dart'
+    show BalanceAdjustment, CreditCardAdjustment;
 import '../../../services/notification/notification_service.dart';
 import '../../categories/widgets/add_category_bottom_sheet.dart';
 import '../../home/widgets/transaction_list_item.dart';
@@ -88,8 +93,33 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
       final currency = selectedAccount?.currency ?? 'INR';
       final notificationsOn = ref.read(settingsProvider).notificationsEnabled;
 
+      // A credit-card payment mode never touches the bank balance
+      // (newAffectsBalance above already reflects that) but must still move
+      // the card's own outstanding — a purchase raises it, and a refund
+      // credited back to the card lowers it.
+      final allCreditCardAccounts =
+          ref.read(creditCardAccountsProvider).value ?? [];
+      final linkedCard = selectedMode?.type == PaymentModeType.creditCard
+          ? _findLinkedCard(allCreditCardAccounts, selectedMode!.id)
+          : null;
+      final newTxnCategory = linkedCard != null
+          ? (_type == TransactionType.expense
+              ? TxnCategory.creditCardPurchase
+              : TxnCategory.refund)
+          : TxnCategoryExt.fromLegacyType(_type);
+      final newCardDelta = linkedCard == null
+          ? 0.0
+          : (_type == TransactionType.expense ? amount : -amount);
+
       if (widget.editTransaction != null) {
-        // Edit mode
+        // Edit mode. Reviewing and saving an SMS-derived transaction is the
+        // user's confirmation of it — once it reaches `confirmed`, the raw
+        // SMS has served its "why did the app extract this?" purpose and
+        // sensitive digit-runs (account numbers/balances) are redacted in
+        // place, same as the always-high-confidence path in sms_service.dart.
+        final needsConfirmRedaction = widget.editTransaction!.processingStatus !=
+                TxnProcessingStatus.confirmed &&
+            widget.editTransaction!.rawSms != null;
         final updated = widget.editTransaction!.copyWith(
           title: _titleCtrl.text.trim(),
           amount: amount,
@@ -100,8 +130,13 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
           paymentModeId: _paymentModeId,
           notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
           affectsBalance: newAffectsBalance,
+          processingStatus: TxnProcessingStatus.confirmed,
+          rawSms: needsConfirmRedaction
+              ? () => redactSensitiveDigits(widget.editTransaction!.rawSms!)
+              : null,
+          txnCategory: newTxnCategory,
+          creditCardAccountId: () => linkedCard?.id,
         );
-        await firestoreService.updateTransaction(updated);
 
         // Adjust balance: handle account change and affectsBalance transitions
         final oldAccountId = widget.editTransaction!.accountId;
@@ -112,30 +147,67 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
             oldType == TransactionType.income ? oldAmount : -oldAmount;
         final newDelta = _type == TransactionType.income ? amount : -amount;
 
+        final adjustments = <BalanceAdjustment>[];
         if (oldAccountId != _accountId!) {
           // Account changed: reverse old leg, apply new leg (each gated independently)
           if (oldAffectsBalance) {
-            await firestoreService.updateAccountBalance(
-                user.uid, oldAccountId, -oldDelta);
+            adjustments
+                .add(BalanceAdjustment(accountId: oldAccountId, delta: -oldDelta));
           }
           if (newAffectsBalance) {
-            await firestoreService.updateAccountBalance(
-                user.uid, _accountId!, newDelta);
+            adjustments
+                .add(BalanceAdjustment(accountId: _accountId!, delta: newDelta));
           }
         } else {
           // Same account — 4-case balance adjustment
           if (oldAffectsBalance && newAffectsBalance) {
-            await firestoreService.updateAccountBalance(
-                user.uid, _accountId!, newDelta - oldDelta);
+            adjustments.add(BalanceAdjustment(
+                accountId: _accountId!, delta: newDelta - oldDelta));
           } else if (oldAffectsBalance && !newAffectsBalance) {
-            await firestoreService.updateAccountBalance(
-                user.uid, _accountId!, -oldDelta);
+            adjustments
+                .add(BalanceAdjustment(accountId: _accountId!, delta: -oldDelta));
           } else if (!oldAffectsBalance && newAffectsBalance) {
-            await firestoreService.updateAccountBalance(
-                user.uid, _accountId!, newDelta);
+            adjustments
+                .add(BalanceAdjustment(accountId: _accountId!, delta: newDelta));
           }
           // both false → no balance change
         }
+
+        // Same before/after shape as the bank-balance adjustment above, but
+        // for the linked credit card's outstanding instead of an account.
+        final oldCardId = widget.editTransaction!.creditCardAccountId;
+        final oldTxnCategory = widget.editTransaction!.txnCategory;
+        final oldCardDelta = oldCardId == null
+            ? 0.0
+            : (oldTxnCategory == TxnCategory.creditCardPurchase
+                ? oldAmount
+                : oldTxnCategory == TxnCategory.refund
+                    ? -oldAmount
+                    : 0.0);
+
+        final creditCardAdjustments = <CreditCardAdjustment>[];
+        if (oldCardId != linkedCard?.id) {
+          if (oldCardId != null && oldCardDelta != 0) {
+            creditCardAdjustments.add(CreditCardAdjustment(
+                creditCardAccountId: oldCardId, delta: -oldCardDelta));
+          }
+          if (linkedCard != null && newCardDelta != 0) {
+            creditCardAdjustments.add(CreditCardAdjustment(
+                creditCardAccountId: linkedCard.id, delta: newCardDelta));
+          }
+        } else if (linkedCard != null) {
+          final diff = newCardDelta - oldCardDelta;
+          if (diff != 0) {
+            creditCardAdjustments.add(CreditCardAdjustment(
+                creditCardAccountId: linkedCard.id, delta: diff));
+          }
+        }
+
+        await firestoreService.updateTransactionWithBalanceAdjustments(
+          updated,
+          balanceAdjustments: adjustments,
+          creditCardAdjustments: creditCardAdjustments,
+        );
 
         if (notificationsOn) {
           await NotificationService.showTransactionUpdatedNotification(
@@ -158,13 +230,24 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
           notes: _notesCtrl.text.trim().isEmpty ? null : _notesCtrl.text.trim(),
           createdAt: now,
           affectsBalance: newAffectsBalance,
+          txnCategory: newTxnCategory,
+          creditCardAccountId: linkedCard?.id,
         );
-        await firestoreService.createTransaction(tx);
+        final adjustments = <BalanceAdjustment>[];
         if (newAffectsBalance) {
           final delta = _type == TransactionType.income ? amount : -amount;
-          await firestoreService.updateAccountBalance(
-              user.uid, _accountId!, delta);
+          adjustments.add(BalanceAdjustment(accountId: _accountId!, delta: delta));
         }
+        final creditCardAdjustments = <CreditCardAdjustment>[];
+        if (linkedCard != null && newCardDelta != 0) {
+          creditCardAdjustments.add(CreditCardAdjustment(
+              creditCardAccountId: linkedCard.id, delta: newCardDelta));
+        }
+        await firestoreService.createTransactionWithBalanceUpdate(
+          tx,
+          balanceAdjustments: adjustments,
+          creditCardAdjustments: creditCardAdjustments,
+        );
 
         if (notificationsOn) {
           await NotificationService.showTransactionSavedNotification(
@@ -639,6 +722,15 @@ class _AddTransactionScreenState extends ConsumerState<AddTransactionScreen> {
   PaymentMode? _findPaymentMode(List<PaymentMode> items, String id) {
     try {
       return items.firstWhere((m) => m.id == id);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  CreditCardAccount? _findLinkedCard(
+      List<CreditCardAccount> items, String paymentModeId) {
+    try {
+      return items.firstWhere((c) => c.paymentModeId == paymentModeId);
     } catch (_) {
       return null;
     }

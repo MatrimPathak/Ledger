@@ -4,13 +4,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:go_router/go_router.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/battery_opt_provider.dart';
 import '../../../providers/firestore_provider.dart';
 import '../../../providers/settings_provider.dart';
+import '../../../services/firebase/reconciliation_service.dart';
+import '../../../services/secure/secure_prefs_bridge.dart';
 import '../../../services/sms/sms_service.dart';
 import '../../../services/battery_optimization_service.dart';
 
@@ -178,6 +179,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 subtitle: 'Required for AI insights',
                 onTap: () => _editApiKey(context),
               ),
+              // Smart detection
+              _SectionHeader('Smart Detection'),
+              _SettingsTile(
+                icon: Icons.notifications_active_outlined,
+                title: 'Notification Access',
+                subtitle: 'Optional — suggest merchants from payment-app notifications',
+                onTap: () => context.push('/notification-access'),
+              ),
+              // Data
+              _SectionHeader('Data'),
+              _SettingsTile(
+                icon: Icons.fact_check_outlined,
+                title: 'Verify Card Balances',
+                subtitle: 'Recompute credit card outstanding from your transaction history',
+                onTap: () => _verifyBalances(context),
+              ),
               // Account
               _SectionHeader('Account'),
               _SettingsTile(
@@ -219,6 +236,32 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     );
   }
 
+  Future<void> _verifyBalances(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(const SnackBar(content: Text('Checking balances…')));
+    try {
+      final result = await ReconciliationService().reconcileBalances();
+      if (!context.mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            result.checked == 0
+                ? 'No credit cards to check yet.'
+                : result.allMatch
+                    ? 'All ${result.checked} card balance(s) verified.'
+                    : '${result.mismatched} of ${result.checked} card balance(s) may be out of sync — review them in Accounts.',
+          ),
+        ),
+      );
+    } catch (e) {
+      if (context.mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Could not verify balances: $e')),
+        );
+      }
+    }
+  }
+
   Future<void> _editApiKey(BuildContext context) async {
     const storage = FlutterSecureStorage();
     final current =
@@ -254,9 +297,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     ctrl.dispose();
     if (result == null) return;
     await storage.write(key: AppConstants.prefKeyClaudeApiKey, value: result);
-    // Mirror to SharedPreferences so the background SMS isolate can read it.
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(AppConstants.prefKeyClaudeApiKey, result);
+    // Mirror to the Keystore-backed native store so the background SMS
+    // worker can read it without ever touching plaintext SharedPreferences.
+    await SecurePrefsBridge.write(AppConstants.prefKeyClaudeApiKey, result);
     if (context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('API key saved')),

@@ -1,3 +1,4 @@
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -5,11 +6,14 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/utils/currency_formatter.dart';
 import '../../../core/utils/payment_mode_filters.dart';
 import '../../../models/account.dart';
+import '../../../models/credit_card_account.dart';
 import '../../../models/payment_mode.dart';
 import '../../../providers/accounts_provider.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/credit_card_accounts_provider.dart';
 import '../../../providers/firestore_provider.dart';
 import '../../../providers/payment_modes_provider.dart';
+import '../widgets/credit_card_details_bottom_sheet.dart';
 
 class AccountsScreen extends ConsumerStatefulWidget {
   const AccountsScreen({super.key});
@@ -201,15 +205,29 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
                   ),
                 );
               }
+              final creditCardAccounts =
+                  ref.watch(creditCardAccountsProvider).value ?? [];
               return SliverList(
                 delegate: SliverChildBuilderDelegate(
-                  (ctx, i) => _PaymentModeItem(
-                    mode: filtered[i],
-                    accountName: _accountName(accounts, filtered[i].accountId),
-                    onEdit: () => context.push(
-                        '/edit-payment-mode', extra: filtered[i]),
-                    onDelete: () => _deletePaymentMode(filtered[i]),
-                  ),
+                  (ctx, i) {
+                    final mode = filtered[i];
+                    final linkedCard = mode.type == PaymentModeType.creditCard
+                        ? creditCardAccounts
+                            .where((c) => c.paymentModeId == mode.id)
+                            .firstOrNull
+                        : null;
+                    return _PaymentModeItem(
+                      mode: mode,
+                      accountName: _accountName(accounts, mode.accountId),
+                      linkedCard: linkedCard,
+                      onEdit: () =>
+                          context.push('/edit-payment-mode', extra: mode),
+                      onDelete: () => _deletePaymentMode(mode),
+                      onEditCardDetails: mode.type == PaymentModeType.creditCard
+                          ? () => _editCardDetails(mode, linkedCard)
+                          : null,
+                    );
+                  },
                   childCount: filtered.length,
                 ),
               );
@@ -298,6 +316,20 @@ class _AccountsScreenState extends ConsumerState<AccountsScreen> {
         );
       }
     }
+  }
+
+  void _editCardDetails(PaymentMode mode, CreditCardAccount? existing) {
+    final user = ref.read(authStateProvider).value;
+    if (user == null) return;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => CreditCardDetailsBottomSheet(
+        userId: user.uid,
+        paymentMode: mode,
+        existing: existing,
+      ),
+    );
   }
 }
 
@@ -451,19 +483,24 @@ class _AddAccountCard extends StatelessWidget {
 class _PaymentModeItem extends StatelessWidget {
   final PaymentMode mode;
   final String accountName;
+  final CreditCardAccount? linkedCard;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final VoidCallback? onEditCardDetails;
 
   const _PaymentModeItem({
     required this.mode,
     required this.accountName,
+    this.linkedCard,
     required this.onEdit,
     required this.onDelete,
+    this.onEditCardDetails,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final card = linkedCard;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       padding: const EdgeInsets.all(14),
@@ -472,73 +509,175 @@ class _PaymentModeItem extends StatelessWidget {
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: theme.colorScheme.outline),
       ),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 44,
-            height: 44,
-            decoration: BoxDecoration(
-              color: AppColors.indigo500.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.payment_outlined,
-                color: AppColors.indigo400, size: 20),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(mode.title, style: theme.textTheme.titleMedium),
-                Text(mode.type.label, style: theme.textTheme.bodySmall),
-              ],
-            ),
-          ),
-          if (accountName.isNotEmpty)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: AppColors.indigo500.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(20),
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: AppColors.indigo500.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.payment_outlined,
+                    color: AppColors.indigo400, size: 20),
               ),
-              child: Text(accountName,
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: AppColors.indigo400,
-                  )),
-            ),
-          const SizedBox(width: 8),
-          PopupMenuButton<String>(
-            icon: Icon(Icons.more_vert,
-                size: 18,
-                color: theme.colorScheme.onSurface.withOpacity(0.5)),
-            onSelected: (v) {
-              if (v == 'edit') onEdit();
-              if (v == 'delete') onDelete();
-            },
-            itemBuilder: (_) => [
-              const PopupMenuItem(
-                value: 'edit',
-                child: Row(children: [
-                  Icon(Icons.edit_outlined, size: 18),
-                  SizedBox(width: 8),
-                  Text('Edit'),
-                ]),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(mode.title, style: theme.textTheme.titleMedium),
+                    Text(mode.type.label, style: theme.textTheme.bodySmall),
+                  ],
+                ),
               ),
-              const PopupMenuItem(
-                value: 'delete',
-                child: Row(children: [
-                  Icon(Icons.delete_outline,
-                      size: 18, color: AppColors.expenseRedDark),
-                  SizedBox(width: 8),
-                  Text('Delete',
-                      style: TextStyle(color: AppColors.expenseRedDark)),
-                ]),
+              if (accountName.isNotEmpty)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppColors.indigo500.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(accountName,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: AppColors.indigo400,
+                      )),
+                ),
+              const SizedBox(width: 8),
+              PopupMenuButton<String>(
+                icon: Icon(Icons.more_vert,
+                    size: 18,
+                    color: theme.colorScheme.onSurface.withOpacity(0.5)),
+                onSelected: (v) {
+                  if (v == 'edit') onEdit();
+                  if (v == 'delete') onDelete();
+                  if (v == 'card_details') onEditCardDetails?.call();
+                },
+                itemBuilder: (_) => [
+                  const PopupMenuItem(
+                    value: 'edit',
+                    child: Row(children: [
+                      Icon(Icons.edit_outlined, size: 18),
+                      SizedBox(width: 8),
+                      Text('Edit'),
+                    ]),
+                  ),
+                  if (onEditCardDetails != null)
+                    PopupMenuItem(
+                      value: 'card_details',
+                      child: Row(children: [
+                        const Icon(Icons.credit_card_outlined, size: 18),
+                        const SizedBox(width: 8),
+                        Text(card != null ? 'Card details' : 'Set up card details'),
+                      ]),
+                    ),
+                  const PopupMenuItem(
+                    value: 'delete',
+                    child: Row(children: [
+                      Icon(Icons.delete_outline,
+                          size: 18, color: AppColors.expenseRedDark),
+                      SizedBox(width: 8),
+                      Text('Delete',
+                          style: TextStyle(color: AppColors.expenseRedDark)),
+                    ]),
+                  ),
+                ],
               ),
             ],
           ),
+          if (card != null) ...[
+            const Divider(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: _CardStat(
+                    label: 'Outstanding',
+                    value: CurrencyFormatter.format(card.currentOutstanding,
+                        currency: card.currency),
+                    color: AppColors.expenseRedDark,
+                  ),
+                ),
+                if (card.creditLimit > 0)
+                  Expanded(
+                    child: _CardStat(
+                      label: 'Available credit',
+                      value: CurrencyFormatter.format(card.availableCredit,
+                          currency: card.currency),
+                    ),
+                  ),
+                if (card.dueDay != null)
+                  Expanded(
+                    child: _CardStat(
+                      label: 'Due date',
+                      value: '${card.dueDay}${_ordinalSuffix(card.dueDay!)}',
+                    ),
+                  ),
+              ],
+            ),
+            if (card.needsReconciliation) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  const Icon(Icons.info_outline,
+                      size: 16, color: Colors.orange),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Balance may be out of sync — check Settings → Verify Card Balances.',
+                      style: theme.textTheme.labelSmall
+                          ?.copyWith(color: Colors.orange.shade800),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
         ],
       ),
+    );
+  }
+
+  String _ordinalSuffix(int day) {
+    if (day >= 11 && day <= 13) return 'th';
+    switch (day % 10) {
+      case 1:
+        return 'st';
+      case 2:
+        return 'nd';
+      case 3:
+        return 'rd';
+      default:
+        return 'th';
+    }
+  }
+}
+
+class _CardStat extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color? color;
+
+  const _CardStat({required this.label, required this.value, this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: theme.textTheme.labelSmall),
+        Text(
+          value,
+          style: theme.textTheme.titleSmall?.copyWith(
+            fontWeight: FontWeight.w700,
+            color: color,
+          ),
+        ),
+      ],
     );
   }
 }

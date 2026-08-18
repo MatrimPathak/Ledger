@@ -1,0 +1,140 @@
+{
+  "_comment": "Shared SMS parsing fixtures asserted against by both the Dart test (test/services/sms/local_sms_parser_test.dart) and the Kotlin JVM test (android/app/src/test/kotlin/com/matrimpathak/ledger/LocalSmsParserTest.kt), so both interpreters are held to the exact same expected extraction. Amounts/fields were hand-traced against assets/sms_patterns/bank_patterns.json's regexes.",
+  "samples": [
+    {
+      "id": "upi_debit_high_confidence",
+      "body": "Rs.286.00 debited from A/C XX1234 to VPA rajesh@okhdfc on 15-08-26. UPI Ref No 402312345678. Not you? Call 1800123456",
+      "expected": {
+        "amount": 286.0,
+        "direction": "debit",
+        "paymentMethod": "upi",
+        "txnCategoryHint": null,
+        "referenceNumber": "402312345678",
+        "merchantCandidate": "rajesh@okhdfc",
+        "accountLastDigits": "1234",
+        "matchedRuleId": "upi_debit",
+        "tier": "high"
+      }
+    },
+    {
+      "id": "upi_credit_high_confidence",
+      "body": "Rs.50000.00 credited to A/C XX7890 from VPA employer@icici on 01-08-26. UPI Ref No 998877665544.",
+      "expected": {
+        "amount": 50000.0,
+        "direction": "credit",
+        "paymentMethod": "upi",
+        "txnCategoryHint": null,
+        "referenceNumber": "998877665544",
+        "merchantCandidate": "employer@icici",
+        "accountLastDigits": "7890",
+        "matchedRuleId": "upi_credit",
+        "tier": "high"
+      }
+    },
+    {
+      "id": "bank_debit_neft_medium_confidence",
+      "body": "INR 12000.00 debited from your account for NEFT transfer. Avl Bal INR 45000.00",
+      "expected": {
+        "amount": 12000.0,
+        "direction": "debit",
+        "paymentMethod": "bankTransfer",
+        "txnCategoryHint": null,
+        "referenceNumber": null,
+        "merchantCandidate": null,
+        "accountLastDigits": null,
+        "matchedRuleId": "bank_debit_generic",
+        "tier": "medium"
+      }
+    },
+    {
+      "id": "atm_withdrawal_medium_confidence",
+      "body": "Rs.2000.00 withdrawn at ATM XX5566 on 10-08-26. Avl Bal Rs.8000.00",
+      "expected": {
+        "amount": 2000.0,
+        "direction": "debit",
+        "paymentMethod": "atm",
+        "txnCategoryHint": "expense",
+        "referenceNumber": null,
+        "merchantCandidate": null,
+        "accountLastDigits": null,
+        "matchedRuleId": "atm_withdrawal",
+        "tier": "medium"
+      }
+    },
+    {
+      "id": "credit_card_purchase_medium_confidence",
+      "body": "Your Credit Card XX9988 has been used for a txn of Rs.4500.00 at Amazon on 12-08-26.",
+      "expected": {
+        "amount": 4500.0,
+        "direction": "debit",
+        "paymentMethod": "creditCard",
+        "txnCategoryHint": "creditCardPurchase",
+        "referenceNumber": null,
+        "merchantCandidate": "Amazon",
+        "accountLastDigits": "9988",
+        "matchedRuleId": "credit_card_purchase",
+        "tier": "medium"
+      }
+    },
+    {
+      "id": "credit_card_bill_payment_medium_confidence",
+      "body": "Payment received towards your Credit Card XX9988 for Rs.15000.00 on 05-08-26. Thank you.",
+      "expected": {
+        "amount": 15000.0,
+        "direction": "debit",
+        "paymentMethod": "creditCard",
+        "txnCategoryHint": "creditCardPayment",
+        "referenceNumber": null,
+        "merchantCandidate": null,
+        "accountLastDigits": "9988",
+        "matchedRuleId": "credit_card_bill_payment",
+        "tier": "medium"
+      }
+    },
+    {
+      "id": "refund_medium_confidence",
+      "body": "Rs.499.00 refund processed for your cancelled order from Myntra. Ref No RFD887766.",
+      "expected": {
+        "amount": 499.0,
+        "direction": "credit",
+        "paymentMethod": null,
+        "txnCategoryHint": "refund",
+        "referenceNumber": "RFD887766",
+        "merchantCandidate": "Myntra",
+        "accountLastDigits": null,
+        "matchedRuleId": "refund",
+        "tier": "medium"
+      }
+    },
+    {
+      "id": "balance_inquiry_low_confidence",
+      "body": "Your available balance as on 01-Aug-26 is Rs.34567.89. For queries call 1800123456.",
+      "expected": {
+        "amount": 34567.89,
+        "direction": null,
+        "paymentMethod": null,
+        "txnCategoryHint": null,
+        "referenceNumber": null,
+        "merchantCandidate": null,
+        "accountLastDigits": null,
+        "matchedRuleId": "none",
+        "tier": "low"
+      }
+    },
+    {
+      "id": "unknown_non_transaction_format_low_confidence",
+      "body": "Dear Customer, your KYC is due for update. Please visit nearest branch to avoid service disruption. - YourBank",
+      "expected": {
+        "amount": null,
+        "direction": null,
+        "paymentMethod": null,
+        "txnCategoryHint": null,
+        "referenceNumber": null,
+        "merchantCandidate": null,
+        "accountLastDigits": null,
+        "matchedRuleId": "none",
+        "tier": "low"
+      }
+    }
+  ]
+}

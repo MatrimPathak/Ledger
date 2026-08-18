@@ -50,6 +50,21 @@
             </intent-filter>
         </receiver>
 
+        <!-- Opt-in only: the user must explicitly grant access via
+             Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS (Android allows no
+             other grant mechanism for this permission). Extracts only
+             package/time/amount from each notification for correlation
+             against SMS-derived transactions — see
+             LedgerNotificationListenerService for what is/isn't read. -->
+        <service
+            android:name=".LedgerNotificationListenerService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService"/>
+            </intent-filter>
+        </service>
+
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />

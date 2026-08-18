@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,6 +8,8 @@ import 'auth_provider.dart';
 import 'firestore_provider.dart';
 import 'accounts_provider.dart';
 import '../models/transaction.dart' as app_model;
+import '../models/subscription.dart' as sub_model;
+import 'subscriptions_provider.dart';
 
 final analyticsInsightsProvider =
     FutureProvider<List<AnalyticsInsight>>((ref) async {
@@ -30,7 +33,7 @@ final analyticsInsightsProvider =
   }
 
   // Aggregate transaction data to minimize Claude API tokens
-  final summary = _buildSummary(transactions);
+  final summary = buildAnalyticsSummary(transactions);
   final currency = accounts.isNotEmpty ? accounts.first.currency : 'INR';
 
   const storage = FlutterSecureStorage();
@@ -66,13 +69,30 @@ final analyticsInsightsProvider =
   return results;
 });
 
-List<Map<String, dynamic>> _buildSummary(List<app_model.Transaction> transactions) {
+/// Transaction categories that move money between the user's own
+/// accounts/instruments rather than representing real spend or income —
+/// excluded from every analytics aggregate so a credit-card bill payment or
+/// an account-to-account transfer never inflates (or deflates) the numbers
+/// Claude reasons about.
+const _nonSpendTxnCategories = {
+  app_model.TxnCategory.transfer,
+  app_model.TxnCategory.creditCardPayment,
+  app_model.TxnCategory.adjustment,
+};
+
+@visibleForTesting
+List<Map<String, dynamic>> buildAnalyticsSummary(
+    List<app_model.Transaction> transactions) {
   double totalExpense = 0;
   double totalIncome = 0;
+  var countedTransactions = 0;
   final categoryTotals = <String, double>{};
   final merchantCounts = <String, int>{};
 
   for (final tx in transactions) {
+    if (_nonSpendTxnCategories.contains(tx.txnCategory)) continue;
+    countedTransactions++;
+
     if (tx.type == app_model.TransactionType.expense) {
       totalExpense += tx.amount;
       categoryTotals[tx.categoryId] =
@@ -92,7 +112,7 @@ List<Map<String, dynamic>> _buildSummary(List<app_model.Transaction> transaction
       'savingsRate': totalIncome > 0
           ? ((totalIncome - totalExpense) / totalIncome)
           : 0,
-      'transactionCount': transactions.length,
+      'transactionCount': countedTransactions,
       'categoryBreakdown': categoryTotals.entries
           .map((e) => {'categoryId': e.key, 'total': e.value})
           .toList(),
@@ -102,8 +122,47 @@ List<Map<String, dynamic>> _buildSummary(List<app_model.Transaction> transaction
           .take(5)
           .map((e) => {'name': e.key, 'count': e.value})
           .toList(),
+      'subscriptionsSummary': _buildSubscriptionsSummary(transactions),
     }
   ];
+}
+
+/// Folds locally-detected recurring patterns into the same aggregated JSON
+/// already sent to Claude for insights — reuses the existing detection
+/// pipeline (`detectSubscriptions`) rather than issuing a second AI call or
+/// duplicating any logic.
+/// Cap on how many individual recurring-merchant entries are serialized
+/// into the Claude prompt payload — the four counts above already carry
+/// the full picture, so this only bounds prompt size/cost as a user's
+/// merchant count grows, not what Claude can reason about in aggregate.
+const _maxSubscriptionItemsInPrompt = 20;
+
+Map<String, dynamic> _buildSubscriptionsSummary(
+    List<app_model.Transaction> transactions) {
+  final detected = detectSubscriptions('_analytics', transactions);
+  int countOf(sub_model.SubscriptionKind kind) =>
+      detected.where((s) => s.kind == kind).length;
+
+  final items = detected.toList()
+    ..sort((a, b) => b.expectedAmount.compareTo(a.expectedAmount));
+
+  return {
+    'subscriptionCount': countOf(sub_model.SubscriptionKind.subscription),
+    'recurringBillCount': countOf(sub_model.SubscriptionKind.recurringBill),
+    'recurringIncomeCount':
+        countOf(sub_model.SubscriptionKind.recurringIncome),
+    'recurringTransferCount':
+        countOf(sub_model.SubscriptionKind.recurringTransfer),
+    'items': items
+        .take(_maxSubscriptionItemsInPrompt)
+        .map((s) => {
+              'name': s.displayName,
+              'kind': s.kind.name,
+              'expectedAmount': s.expectedAmount,
+              'intervalDays': s.intervalDays,
+            })
+        .toList(),
+  };
 }
 
 extension _ListExt<T> on List<T> {

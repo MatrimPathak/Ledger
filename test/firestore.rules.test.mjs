@@ -91,3 +91,150 @@ test('documents outside user-owned paths are denied', async () => {
   await assertFails(db.doc('public/config').get());
   await assertFails(db.doc('public/config').set({ enabled: true }));
 });
+
+test('transaction writes require a non-negative numeric amount matching the owner', async () => {
+  const db = testEnv.authenticatedContext('alice').firestore();
+  const txRef = db.doc('users/alice/transactions/tx-1');
+
+  await assertSucceeds(
+    txRef.set({ userId: 'alice', amount: 250, title: 'Coffee' }),
+  );
+  await assertFails(
+    db.doc('users/alice/transactions/tx-bad-amount').set({
+      userId: 'alice',
+      amount: -50,
+      title: 'Refund abuse',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/transactions/tx-bad-owner').set({
+      userId: 'bob',
+      amount: 50,
+      title: 'Spoofed owner',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/transactions/tx-non-numeric').set({
+      userId: 'alice',
+      amount: '50',
+      title: 'Non-numeric amount',
+    }),
+  );
+});
+
+test('transaction writes validate txnCategory and processingStatus enums when present', async () => {
+  const db = testEnv.authenticatedContext('alice').firestore();
+
+  await assertSucceeds(
+    db.doc('users/alice/transactions/tx-valid-enum').set({
+      userId: 'alice',
+      amount: 100,
+      txnCategory: 'creditCardPayment',
+      processingStatus: 'confirmed',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/transactions/tx-bad-category').set({
+      userId: 'alice',
+      amount: 100,
+      txnCategory: 'notARealCategory',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/transactions/tx-bad-status').set({
+      userId: 'alice',
+      amount: 100,
+      processingStatus: 'madeUpStatus',
+    }),
+  );
+  // A present-but-null txnCategory/processingStatus must be allowed (not
+  // just an absent key) — matches how paymentMethod is already treated,
+  // and how Transaction.toFirestore() can legitimately write null for an
+  // optional field that hasn't been resolved yet.
+  await assertSucceeds(
+    db.doc('users/alice/transactions/tx-null-enums').set({
+      userId: 'alice',
+      amount: 100,
+      txnCategory: null,
+      processingStatus: null,
+    }),
+  );
+});
+
+test('non-transaction subcollections keep the original unconditional owner-write behavior', async () => {
+  const db = testEnv.authenticatedContext('alice').firestore();
+
+  // No userId/amount fields at all — must still succeed, since validation
+  // is scoped to the transactions subcollection only.
+  await assertSucceeds(
+    db.doc('users/alice/merchants/uber').set({ displayName: 'Uber' }),
+  );
+});
+
+test('credit card account writes require the owner and numeric outstanding/limit', async () => {
+  const db = testEnv.authenticatedContext('alice').firestore();
+
+  await assertSucceeds(
+    db.doc('users/alice/creditCardAccounts/card-1').set({
+      userId: 'alice',
+      title: 'HDFC Regalia',
+      currentOutstanding: 18450,
+      creditLimit: 100000,
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/creditCardAccounts/card-bad-owner').set({
+      userId: 'bob',
+      currentOutstanding: 0,
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/creditCardAccounts/card-non-numeric').set({
+      userId: 'alice',
+      currentOutstanding: '18450',
+    }),
+  );
+});
+
+test('subscription writes require the owner and a known kind/status/numeric amount', async () => {
+  const db = testEnv.authenticatedContext('alice').firestore();
+
+  await assertSucceeds(
+    db.doc('users/alice/subscriptions/sub-1').set({
+      userId: 'alice',
+      merchantNameRaw: 'Netflix',
+      kind: 'subscription',
+      expectedAmount: 649,
+      status: 'active',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/subscriptions/sub-bad-owner').set({
+      userId: 'bob',
+      kind: 'subscription',
+      expectedAmount: 649,
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/subscriptions/sub-bad-kind').set({
+      userId: 'alice',
+      kind: 'notARealKind',
+      expectedAmount: 649,
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/subscriptions/sub-non-numeric').set({
+      userId: 'alice',
+      kind: 'subscription',
+      expectedAmount: '649',
+    }),
+  );
+  await assertFails(
+    db.doc('users/alice/subscriptions/sub-bad-status').set({
+      userId: 'alice',
+      kind: 'subscription',
+      expectedAmount: 649,
+      status: 'madeUpStatus',
+    }),
+  );
+});

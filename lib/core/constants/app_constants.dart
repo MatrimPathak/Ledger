@@ -22,6 +22,7 @@ class AppConstants {
   static const String prefKeyUid = 'uid';
   static const String prefKeyLastSmsTimestamp = 'last_sms_timestamp';
   static const String prefKeyProcessedSmsIds = 'processed_sms_ids';
+  static const String prefKeyCorrelationEnabled = 'correlation_enabled';
 
   static const int smsConfidenceThreshold = 40; // 0-100
 

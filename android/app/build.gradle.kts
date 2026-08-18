@@ -51,6 +51,10 @@ dependencies {
     implementation("androidx.multidex:multidex:2.0.1")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 
+    // Android-Keystore-backed encrypted storage for the Claude API key/uid
+    // mirror the background SMS worker reads (see SecurePrefsStore.kt).
+    implementation("androidx.security:security-crypto:1.1.0")
+
     // Firebase deps are declared 'implementation' in the Flutter plugins so they
     // are not transitively visible to the app module. Declare them here explicitly
     // so SmsProcessingWorker can compile against the Firestore and Firebase APIs.
@@ -60,4 +64,13 @@ dependencies {
 
     // Provides kotlinx.coroutines.tasks.await() for Firebase Task<T> suspension.
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0")
+
+    // JVM unit tests (android/app/src/test) for pure-Kotlin classes like
+    // LocalSmsParser that don't touch the Android framework. org.json is
+    // part of the Android platform at runtime (its real implementation is
+    // provided by the OS, not this artifact) — the standalone "org.json:json"
+    // artifact is API-compatible and needed so JSONObject/JSONArray actually
+    // work under a plain JVM test runner instead of throwing "not mocked".
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

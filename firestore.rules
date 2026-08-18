@@ -8,8 +8,54 @@ service cloud.firestore {
       allow read, write: if request.auth != null && request.auth.uid == uid;
 
       match /{subcollection}/{docId} {
-        allow read, write: if request.auth != null && request.auth.uid == uid;
+        allow read, delete: if request.auth != null && request.auth.uid == uid;
+
+        // Field-level validation on top of the owner check. Scoped to the
+        // 'transactions' and 'creditCardAccounts' subcollections —
+        // everything else keeps the original unconditional owner-write
+        // behavior. Fields are validated only when present so older/partial
+        // writes are never rejected.
+        allow create, update: if request.auth != null && request.auth.uid == uid &&
+          (subcollection != 'transactions' ||
+            isValidTransactionWrite(request.resource.data, uid)) &&
+          (subcollection != 'creditCardAccounts' ||
+            isValidCreditCardAccountWrite(request.resource.data, uid)) &&
+          (subcollection != 'subscriptions' ||
+            isValidSubscriptionWrite(request.resource.data, uid));
       }
+    }
+
+    function isValidTransactionWrite(data, ownerId) {
+      return data.userId == ownerId &&
+        (!('amount' in data) || (data.amount is number && data.amount >= 0)) &&
+        (!('txnCategory' in data) || data.txnCategory == null || data.txnCategory in [
+          'expense', 'income', 'transfer',
+          'creditCardPurchase', 'creditCardPayment',
+          'refund', 'adjustment'
+        ]) &&
+        (!('paymentMethod' in data) || data.paymentMethod == null || data.paymentMethod in [
+          'upi', 'bankTransfer', 'debitCard', 'creditCard', 'cash', 'atm', 'wallet'
+        ]) &&
+        (!('processingStatus' in data) || data.processingStatus == null || data.processingStatus in [
+          'local', 'needsAiReview', 'aiProcessed', 'confirmed', 'rejected'
+        ]);
+    }
+
+    function isValidCreditCardAccountWrite(data, ownerId) {
+      return data.userId == ownerId &&
+        (!('currentOutstanding' in data) || data.currentOutstanding is number) &&
+        (!('creditLimit' in data) || data.creditLimit is number);
+    }
+
+    function isValidSubscriptionWrite(data, ownerId) {
+      return data.userId == ownerId &&
+        (!('expectedAmount' in data) || data.expectedAmount is number) &&
+        (!('kind' in data) || data.kind in [
+          'subscription', 'recurringBill', 'recurringIncome', 'recurringTransfer'
+        ]) &&
+        (!('status' in data) || data.status in [
+          'active', 'paused', 'cancelled'
+        ]);
     }
   }
 }
