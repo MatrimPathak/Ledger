@@ -41,25 +41,38 @@ void main() async {
   // otherwise-inaccessible read path. Passing the placeholder as the
   // "existing shared key" always resolves fresh from secure storage/env,
   // since there is no plaintext tier to short-circuit on anymore.
-  const storage = FlutterSecureStorage();
-  final secureKey = await storage.read(key: AppConstants.prefKeyClaudeApiKey);
-  final resolvedKey = resolveSharedApiKeySeed(
-        sharedPreferencesKey: AppConstants.claudeApiKeyPlaceholder,
-        secureStorageKey: secureKey,
-        environmentKey: dotenv.env['CLAUDE_API_KEY'],
-      ) ??
-      AppConstants.claudeApiKeyPlaceholder;
-  final isValidSecureKey = secureKey != null &&
-      secureKey.isNotEmpty &&
-      secureKey != AppConstants.claudeApiKeyPlaceholder;
-  if (resolvedKey != AppConstants.claudeApiKeyPlaceholder) {
-    if (!isValidSecureKey) {
-      // Seed secure storage from .env on first run so future launches read
-      // a stable value straight from it.
-      await storage.write(
-          key: AppConstants.prefKeyClaudeApiKey, value: resolvedKey);
+  //
+  // Guarded: on some devices flutter_secure_storage's read/write throws
+  // (e.g. a Keystore-backed key lost to an OS/app-data restore while the
+  // encrypted blob survived — the classic "BadPaddingException"/"MAC check
+  // failed" case after a fresh Play Store install). That must never block
+  // runApp() below, or the app hangs on the native splash screen forever.
+  try {
+    const storage = FlutterSecureStorage();
+    final secureKey =
+        await storage.read(key: AppConstants.prefKeyClaudeApiKey);
+    final resolvedKey = resolveSharedApiKeySeed(
+          sharedPreferencesKey: AppConstants.claudeApiKeyPlaceholder,
+          secureStorageKey: secureKey,
+          environmentKey: dotenv.env['CLAUDE_API_KEY'],
+        ) ??
+        AppConstants.claudeApiKeyPlaceholder;
+    final isValidSecureKey = secureKey != null &&
+        secureKey.isNotEmpty &&
+        secureKey != AppConstants.claudeApiKeyPlaceholder;
+    if (resolvedKey != AppConstants.claudeApiKeyPlaceholder) {
+      if (!isValidSecureKey) {
+        // Seed secure storage from .env on first run so future launches read
+        // a stable value straight from it.
+        await storage.write(
+            key: AppConstants.prefKeyClaudeApiKey, value: resolvedKey);
+      }
+      await SecurePrefsBridge.write(
+          AppConstants.prefKeyClaudeApiKey, resolvedKey);
     }
-    await SecurePrefsBridge.write(AppConstants.prefKeyClaudeApiKey, resolvedKey);
+  } catch (_) {
+    // Best-effort mirror — a failure here must not block runApp() below.
+    // The user can still enter/reset the API key from Settings afterwards.
   }
 
   if (prefs.getBool(AppConstants.prefKeyAutoDetect) == true) {
