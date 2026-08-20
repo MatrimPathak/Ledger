@@ -89,6 +89,23 @@ class LocalSmsParser(private val rules: JSONObject) {
             }
         }
 
+        // A UPI (or bank-transfer) payment mode has no digits of its own to
+        // match against — a UPI ID is a VPA, not an account number — so when
+        // a user has several UPI modes on different accounts, the digit
+        // loop above can never tell them apart. The SMS's only reliable
+        // signal for which one was used is the bank account it names,
+        // already resolved as matchedAccountId above; disambiguate by
+        // account + type instead. Mirrors local_sms_parser.dart.
+        if (matchedPaymentModeId == null && matchedAccountId != null && paymentMethod != null) {
+            val accountMode = paymentModes.firstOrNull {
+                it["accountId"] == matchedAccountId && it["type"] == paymentMethod
+            }
+            if (accountMode != null) {
+                matchedPaymentModeId = accountMode["id"] as? String
+                instrumentMatch = true
+            }
+        }
+
         var points = 0
         if (amount != null) points += 30
         if (direction != null) points += 20

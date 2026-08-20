@@ -81,6 +81,32 @@ class LocalSmsParserTest {
     }
 
     @Test
+    fun `disambiguates between several UPI modes on different accounts by account plus type`() {
+        val body = "Sent Rs.500.00\n" +
+            "From HDFC Bank A/C *4321\n" +
+            "To Test Merchant\n" +
+            "On 18-08-26\n" +
+            "Ref 999888777666\n" +
+            "Not You?\n" +
+            "Call 18002586161/SMS BLOCK UPI to 7308080808"
+
+        val accounts = listOf(
+            mapOf("id" to "acc-1", "lastSixDigits" to "004321"),
+            mapOf("id" to "acc-2", "lastSixDigits" to "009988"),
+        )
+        val paymentModes = listOf(
+            mapOf("id" to "upi-on-acc2", "type" to "upi", "accountId" to "acc-2"),
+            mapOf("id" to "upi-on-acc1", "type" to "upi", "accountId" to "acc-1"),
+            mapOf("id" to "card-on-acc1", "type" to "debitCard", "accountId" to "acc-1"),
+        )
+
+        val result = parser.parse(body, accounts = accounts, paymentModes = paymentModes)
+
+        assertEquals("acc-1", result.matchedAccountId)
+        assertEquals("upi-on-acc1", result.matchedPaymentModeId)
+    }
+
+    @Test
     fun `an empty string yields zero confidence and no rule match`() {
         val result = parser.parse("")
 

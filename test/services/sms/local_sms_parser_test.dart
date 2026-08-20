@@ -109,6 +109,74 @@ void main() {
       expect(withMode.confidence - withoutMode.confidence, closeTo(0.20, 0.001));
     });
 
+    test(
+        'disambiguates between several UPI modes on different accounts by '
+        'account + type, since a UPI id has no digits of its own to match',
+        () {
+      const body = 'Sent Rs.500.00\n'
+          'From HDFC Bank A/C *4321\n'
+          'To Test Merchant\n'
+          'On 18-08-26\n'
+          'Ref 999888777666\n'
+          'Not You?\n'
+          'Call 18002586161/SMS BLOCK UPI to 7308080808';
+
+      final accounts = [
+        Account(
+          id: 'acc-1',
+          userId: 'user-1',
+          title: 'HDFC Savings',
+          bankName: 'HDFC Bank',
+          lastSixDigits: '004321',
+          balance: 0,
+          holderName: 'Test User',
+          createdAt: DateTime.utc(2026),
+        ),
+        Account(
+          id: 'acc-2',
+          userId: 'user-1',
+          title: 'ICICI Savings',
+          bankName: 'ICICI Bank',
+          lastSixDigits: '009988',
+          balance: 0,
+          holderName: 'Test User',
+          createdAt: DateTime.utc(2026),
+        ),
+      ];
+      final paymentModes = [
+        PaymentMode(
+          id: 'upi-on-acc2',
+          userId: 'user-1',
+          type: PaymentModeType.upi,
+          accountId: 'acc-2',
+          title: 'UPI on ICICI',
+          createdAt: DateTime.utc(2026),
+        ),
+        PaymentMode(
+          id: 'upi-on-acc1',
+          userId: 'user-1',
+          type: PaymentModeType.upi,
+          accountId: 'acc-1',
+          title: 'UPI on HDFC',
+          createdAt: DateTime.utc(2026),
+        ),
+        PaymentMode(
+          id: 'card-on-acc1',
+          userId: 'user-1',
+          type: PaymentModeType.debitCard,
+          accountId: 'acc-1',
+          title: 'HDFC Debit Card',
+          createdAt: DateTime.utc(2026),
+        ),
+      ];
+
+      final result =
+          parser.parse(body, accounts: accounts, paymentModes: paymentModes);
+
+      expect(result.matchedAccountId, 'acc-1');
+      expect(result.matchedPaymentModeId, 'upi-on-acc1');
+    });
+
     test('an empty string yields zero confidence and no rule match', () {
       final result = parser.parse('');
 

@@ -146,6 +146,27 @@ class LocalSmsParser {
       }
     }
 
+    // A UPI (or bank-transfer) payment mode has no digits of its own to
+    // match against — a UPI ID is a VPA, not an account number — so when a
+    // user has several UPI modes on different accounts, the digit loop
+    // above can never tell them apart. The SMS's only reliable signal for
+    // which one was used is the bank account it names, which is already
+    // resolved as matchedAccountId above; disambiguate by account + type
+    // instead. Ambiguous only if the user has two modes of the same type
+    // on the same account, which the SMS text itself can't resolve either.
+    if (matchedPaymentModeId == null &&
+        matchedAccountId != null &&
+        paymentMethod != null) {
+      final accountMode = paymentModes
+          .where((m) =>
+              m.accountId == matchedAccountId && m.type.name == paymentMethod)
+          .firstOrNull;
+      if (accountMode != null) {
+        matchedPaymentModeId = accountMode.id;
+        lastDigitsMatchedKnownInstrument = true;
+      }
+    }
+
     final confidence = _score(
       hasAmount: amount != null,
       hasDirection: direction != null,
