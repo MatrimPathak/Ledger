@@ -62,6 +62,17 @@
       "merchantRegex": "\\b(?:trf from|received from|from vpa|from)\\s+([a-z0-9@.\\-_ ]{2,40}?)(?:\\s+on\\b|\\s+upi\\b|\\.|,|$)"
     },
     {
+      "id": "upi_sent_debit",
+      "paymentMethod": "upi",
+      "direction": "debit",
+      "txnCategoryHint": null,
+      "keywords": ["sent rs", "sent inr"],
+      "requireKeywords": [],
+      "excludeKeywords": [],
+      "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
+      "merchantRegex": "\\bto\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\.|,|$)"
+    },
+    {
       "id": "credit_card_bill_payment",
       "paymentMethod": "creditCard",
       "direction": "debit",
