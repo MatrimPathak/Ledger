@@ -209,7 +209,11 @@ class LocalSmsParser {
   double? _extractAmount(String body) {
     final match = _amountRegex.firstMatch(body);
     if (match == null) return null;
-    final raw = match.group(1)?.replaceAll(',', '');
+    // Two alternatives, each with its own capture group: "Rs./INR <amount>"
+    // (group 1) or, for banks that state the bare amount with no currency
+    // prefix at all (e.g. "debited by 4710.00"), "by/with/of/for <amount>"
+    // (group 2) — only one of the two is ever populated per match.
+    final raw = (match.group(1) ?? match.group(2))?.replaceAll(',', '');
     if (raw == null) return null;
     return double.tryParse(raw);
   }
@@ -218,7 +222,10 @@ class LocalSmsParser {
     if (pattern == null) return null;
     final regex = RegExp(pattern, caseSensitive: false);
     final match = regex.firstMatch(body);
-    final group = match?.group(1)?.trim();
+    // Collapse whitespace runs (e.g. a stray double space in the source
+    // SMS) so an extracted merchant name doesn't carry it into the UI.
+    final group =
+        match?.group(1)?.trim().replaceAll(RegExp(r'\s+'), ' ');
     return (group == null || group.isEmpty) ? null : group;
   }
 

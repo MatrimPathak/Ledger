@@ -141,14 +141,23 @@ class LocalSmsParser(private val rules: JSONObject) {
 
     private fun extractAmount(body: String): Double? {
         val match = amountRegex.find(body) ?: return null
-        val raw = match.groupValues.getOrNull(1)?.replace(",", "") ?: return null
+        // Two alternatives, each with its own capture group: "Rs./INR
+        // <amount>" (group 1) or, for banks that state the bare amount with
+        // no currency prefix at all (e.g. "debited by 4710.00"), "by/with/
+        // of/for <amount>" (group 2) — an unmatched Kotlin group yields ""
+        // rather than null, hence the isNotEmpty() check.
+        val group1 = match.groupValues.getOrNull(1)?.takeIf { it.isNotEmpty() }
+        val group2 = match.groupValues.getOrNull(2)?.takeIf { it.isNotEmpty() }
+        val raw = (group1 ?: group2)?.replace(",", "") ?: return null
         return raw.toDoubleOrNull()
     }
 
     private fun extractGroup(body: String, pattern: String): String? {
         val regex = Regex(pattern, RegexOption.IGNORE_CASE)
         val match = regex.find(body) ?: return null
-        val group = match.groupValues.getOrNull(1)?.trim()
+        // Collapse whitespace runs (e.g. a stray double space in the source
+        // SMS) so an extracted merchant name doesn't carry it into the UI.
+        val group = match.groupValues.getOrNull(1)?.trim()?.replace(Regex("""\s+"""), " ")
         return if (group.isNullOrEmpty()) null else group
     }
 
