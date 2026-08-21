@@ -49,6 +49,7 @@ class SmsReceiver : BroadcastReceiver() {
                     SmsProcessingWorker.KEY_SMS_BODY to body,
                     SmsProcessingWorker.KEY_SMS_TIMESTAMP to timestamp,
                     SmsProcessingWorker.KEY_SMS_FINGERPRINT to fingerprint,
+                    SmsProcessingWorker.KEY_SMS_SENDER to sender,
                 )
             )
             .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)

@@ -57,5 +57,32 @@ service cloud.firestore {
           'active', 'paused', 'cancelled'
         ]);
     }
+
+    // Learned SMS-parsing templates: shared across every signed-in user,
+    // not scoped under /users/{uid} — see lib/models/sms_template.dart.
+    // Safe to share because a template is, by construction, never allowed
+    // to contain a real amount/name/account number: only a bank's fixed
+    // message wording plus placeholder markers, plus a handful of
+    // classification fields. No delete — a bad template is corrected by
+    // publishing a fresh write to the same deterministic doc id, not by
+    // removing history.
+    match /smsTemplates/{templateId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && isValidSmsTemplateWrite(request.resource.data);
+      allow delete: if false;
+    }
+
+    function isValidSmsTemplateWrite(data) {
+      return data.bank is string &&
+        data.bankCode is string &&
+        data.skeleton is string && data.skeleton.size() > 0 && data.skeleton.size() <= 500 &&
+        data.templateConfidence is number &&
+        data.templateConfidence >= 0 && data.templateConfidence <= 1 &&
+        data.matchCount is number &&
+        (!('direction' in data) || data.direction == null || data.direction in ['debit', 'credit']) &&
+        (!('paymentMethod' in data) || data.paymentMethod == null || data.paymentMethod in [
+          'upi', 'bankTransfer', 'debitCard', 'creditCard', 'cash', 'atm', 'wallet'
+        ]);
+    }
   }
 }

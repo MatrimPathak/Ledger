@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 import '../../models/account.dart';
 import '../../models/payment_mode.dart';
+import '../../models/sms_template.dart';
 
 /// Result of running the declarative rule set (assets/sms_patterns/
 /// bank_patterns.json) against a single SMS body. Never throws — an SMS
@@ -17,7 +18,10 @@ class LocalParseResult {
   final String? accountLastDigits;
   final String? matchedAccountId;
   final String? matchedPaymentModeId;
-  final String matchedRuleId; // rule id, or 'none'
+  final String matchedRuleId; // static rule id, 'none', or 'template'
+  // Set only when matchedRuleId == 'template' — the learned SmsTemplate.id
+  // that matched, so the caller can bump its matchCount/lastMatchedAt.
+  final String? matchedTemplateId;
   final double confidence; // 0.0-1.0, see LocalSmsParser's rubric doc comment
 
   const LocalParseResult({
@@ -31,6 +35,7 @@ class LocalParseResult {
     this.matchedAccountId,
     this.matchedPaymentModeId,
     required this.matchedRuleId,
+    this.matchedTemplateId,
     required this.confidence,
   });
 
@@ -94,8 +99,10 @@ class LocalSmsParser {
 
   LocalParseResult parse(
     String body, {
+    String? sender,
     List<Account> accounts = const [],
     List<PaymentMode> paymentModes = const [],
+    List<SmsTemplate> templates = const [],
   }) {
     final lower = body.toLowerCase();
     final rules = (_rules['rules'] as List).cast<Map<String, dynamic>>();
@@ -108,22 +115,56 @@ class LocalSmsParser {
       }
     }
 
-    final amount = _extractAmount(body);
-    final refNumber = matchedRule != null
-        ? _extractGroup(body, matchedRule['refNumberRegex'] as String?)
-        : null;
-    final merchant = matchedRule != null
-        ? _extractGroup(body, matchedRule['merchantRegex'] as String?)
-        : null;
+    double? amount;
+    String? refNumber;
+    String? merchant;
+    String? matchedRuleId;
+    String? matchedTemplateId;
+    String? templateDirection;
+    String? templatePaymentMethod;
+    String? templateTxnCategoryHint;
+
+    if (matchedRule != null) {
+      amount = _extractAmount(body);
+      refNumber = _extractGroup(body, matchedRule['refNumberRegex'] as String?);
+      merchant = _extractGroup(body, matchedRule['merchantRegex'] as String?);
+      matchedRuleId = matchedRule['id'] as String?;
+    } else {
+      // Layer 3: no hand-written rule fit this message — try templates
+      // learned from a previous novel SMS (see ClaudeService.
+      // parseSmsTransaction) before giving up on local parsing entirely.
+      // A single combined-regex match extracts amount/ref/merchant
+      // together, rather than the independent field regexes a static
+      // rule uses, since the whole template shape is what was validated
+      // at learn time.
+      for (final template in templates) {
+        if (!template.senderMatches(sender)) continue;
+        final extraction = template.tryMatch(body);
+        if (extraction == null) continue;
+        amount = extraction.amount;
+        refNumber = extraction.referenceNumber;
+        merchant = extraction.merchantCandidate;
+        matchedRuleId = 'template';
+        matchedTemplateId = template.id;
+        templateDirection = template.direction;
+        templatePaymentMethod = template.paymentMethod;
+        templateTxnCategoryHint = template.txnCategoryHint;
+        break;
+      }
+      amount ??= _extractAmount(body);
+    }
+
     final lastDigitsRegex = _accountLastDigitsRegex;
     final lastDigits =
         lastDigitsRegex != null ? _firstMatchGroup(body, lastDigitsRegex) : null;
 
-    String? direction = matchedRule?['direction'] as String?;
+    String? direction = matchedRule?['direction'] as String? ?? templateDirection;
     direction ??= _inferDirectionFromKeywords(lower);
 
-    final paymentMethod = matchedRule?['paymentMethod'] as String?;
-    final txnCategoryHint = matchedRule?['txnCategoryHint'] as String?;
+    final paymentMethod =
+        matchedRule?['paymentMethod'] as String? ?? templatePaymentMethod;
+    final txnCategoryHint =
+        matchedRule?['txnCategoryHint'] as String? ?? templateTxnCategoryHint;
 
     String? matchedAccountId;
     String? matchedPaymentModeId;
@@ -186,7 +227,8 @@ class LocalSmsParser {
       accountLastDigits: lastDigits,
       matchedAccountId: matchedAccountId,
       matchedPaymentModeId: matchedPaymentModeId,
-      matchedRuleId: matchedRule?['id'] as String? ?? 'none',
+      matchedRuleId: matchedRuleId ?? 'none',
+      matchedTemplateId: matchedTemplateId,
       confidence: confidence,
     );
   }

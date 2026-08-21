@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:ledger/models/account.dart';
 import 'package:ledger/models/payment_mode.dart';
+import 'package:ledger/models/sms_template.dart';
 import 'package:ledger/services/sms/local_sms_parser.dart';
 
 LocalSmsParser _loadParser() {
@@ -59,6 +60,85 @@ void main() {
         }
       });
     }
+  });
+
+  group('LocalSmsParser learned-template tier', () {
+    // A shape no static rule in bank_patterns.json covers at all — it
+    // deliberately avoids every rule-triggering keyword ("debited",
+    // "credited", "upi", "credit card", "atm", "refund"), same as the
+    // real HDFC "Sent"/"Received" format that motivated this tier.
+    // Exactly the case the template tier exists for: a bank format
+    // previously seen only via the AI fallback (see
+    // ClaudeService.parseSmsTransaction), now resolvable locally.
+    final icici = SmsTemplate(
+      id: 'tpl-icici-debit',
+      bank: 'ICICI Bank',
+      bankCode: 'ICICIB',
+      transactionType: 'bank_debit',
+      direction: 'debit',
+      paymentMethod: 'bankTransfer',
+      txnCategoryHint: null,
+      skeleton: 'ICICI Alert: INR {amount} moved from A/C XX{acct_last4} '
+          'to {merchant} on {date}. Ref {refno}.',
+      templateConfidence: 0.92,
+      createdAt: DateTime.utc(2026),
+      lastMatchedAt: DateTime.utc(2026),
+    );
+    const icc = 'ICICI Alert: INR 1250.50 moved from A/C XX7788 to '
+        'BLINKIT on 19-Aug-26. Ref 445566778899.';
+
+    test('falls back to a matching template when no static rule fits, '
+        'reporting matchedRuleId "template" and the template\'s id', () {
+      final result = parser.parse(icc,
+          sender: 'AD-ICICIB-S', templates: [icici]);
+
+      expect(result.matchedRuleId, 'template');
+      expect(result.matchedTemplateId, 'tpl-icici-debit');
+      expect(result.amount, 1250.5);
+      expect(result.direction, 'debit');
+      expect(result.paymentMethod, 'bankTransfer');
+      expect(result.referenceNumber, '445566778899');
+      expect(result.merchantCandidate, 'BLINKIT');
+      expect(result.accountLastDigits, '7788');
+      expect(result.isHighConfidence, isTrue,
+          reason: 'amount+direction+ref+paymentMethod+merchant = 80/100');
+    });
+
+    test('a template from a different bank\'s sender is not tried', () {
+      final result = parser.parse(icc,
+          sender: 'VM-HDFCBK-T', templates: [icici]);
+
+      expect(result.matchedRuleId, 'none');
+      expect(result.matchedTemplateId, isNull);
+    });
+
+    test('a static rule match takes priority over a template, even one '
+        'that would also match this exact body', () {
+      // upi_debit already covers this shape via bank_patterns.json's own
+      // rules — the template tier must never be consulted once a static
+      // rule fires, so a bad/duplicate learned template can't override
+      // hand-verified extraction.
+      const body =
+          'Rs.286.00 debited from A/C XX1234 to VPA rajesh@okhdfc on '
+          '15-08-26. UPI Ref No 402312345678. Not you? Call 1800123456';
+      final decoyTemplate = SmsTemplate(
+        id: 'decoy',
+        bank: 'HDFC Bank',
+        bankCode: '', // matches any sender, to prove the rule still wins
+        transactionType: 'other',
+        direction: 'credit', // deliberately wrong, to prove it's unused
+        skeleton: 'totally different shape {amount}',
+        templateConfidence: 0.9,
+        createdAt: DateTime.utc(2026),
+        lastMatchedAt: DateTime.utc(2026),
+      );
+
+      final result = parser.parse(body, templates: [decoyTemplate]);
+
+      expect(result.matchedRuleId, 'upi_debit');
+      expect(result.matchedTemplateId, isNull);
+      expect(result.direction, 'debit');
+    });
   });
 
   group('LocalSmsParser confidence rubric', () {

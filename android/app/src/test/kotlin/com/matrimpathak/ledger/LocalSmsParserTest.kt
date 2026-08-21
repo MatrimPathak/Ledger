@@ -80,6 +80,73 @@ class LocalSmsParserTest {
         assertEquals(0.20, withMode.confidence - without.confidence, 0.001)
     }
 
+    // A shape no static rule in bank_patterns.json covers at all — it
+    // deliberately avoids every rule-triggering keyword ("debited",
+    // "credited", "upi", "credit card", "atm", "refund"), same as the
+    // real HDFC "Sent"/"Received" format that motivated this tier.
+    private val iciciTemplate = SmsTemplate(
+        id = "tpl-icici-debit",
+        bank = "ICICI Bank",
+        bankCode = "ICICIB",
+        transactionType = "bank_debit",
+        direction = "debit",
+        paymentMethod = "bankTransfer",
+        txnCategoryHint = null,
+        skeleton = "ICICI Alert: INR {amount} moved from A/C XX{acct_last4} to {merchant} on {date}. Ref {refno}.",
+        templateConfidence = 0.92,
+    )
+    private val iciciBody = "ICICI Alert: INR 1250.50 moved from A/C XX7788 to BLINKIT on 19-Aug-26. Ref 445566778899."
+
+    @Test
+    fun `falls back to a matching template when no static rule fits`() {
+        val result = parser.parse(iciciBody, sender = "AD-ICICIB-S", templates = listOf(iciciTemplate))
+
+        assertEquals("template", result.matchedRuleId)
+        assertEquals("tpl-icici-debit", result.matchedTemplateId)
+        assertEquals(1250.5, result.amount!!, 0.001)
+        assertEquals("debit", result.direction)
+        assertEquals("bankTransfer", result.paymentMethod)
+        assertEquals("445566778899", result.referenceNumber)
+        assertEquals("BLINKIT", result.merchantCandidate)
+        assertEquals("7788", result.accountLastDigits)
+        assertTrue(result.isHighConfidence)
+    }
+
+    @Test
+    fun `a template from a different bank's sender is not tried`() {
+        val result = parser.parse(iciciBody, sender = "VM-HDFCBK-T", templates = listOf(iciciTemplate))
+
+        assertEquals("none", result.matchedRuleId)
+        assertNull(result.matchedTemplateId)
+    }
+
+    @Test
+    fun `a static rule match takes priority over a template`() {
+        // upi_debit already covers this shape via bank_patterns.json's own
+        // rules — the template tier must never be consulted once a static
+        // rule fires, so a bad/duplicate learned template can't override
+        // hand-verified extraction.
+        val body = "Rs.286.00 debited from A/C XX1234 to VPA rajesh@okhdfc on " +
+            "15-08-26. UPI Ref No 402312345678. Not you? Call 1800123456"
+        val decoy = SmsTemplate(
+            id = "decoy",
+            bank = "HDFC Bank",
+            bankCode = "", // matches any sender, to prove the rule still wins
+            transactionType = "other",
+            direction = "credit", // deliberately wrong, to prove it's unused
+            paymentMethod = null,
+            txnCategoryHint = null,
+            skeleton = "totally different shape {amount}",
+            templateConfidence = 0.9,
+        )
+
+        val result = parser.parse(body, templates = listOf(decoy))
+
+        assertEquals("upi_debit", result.matchedRuleId)
+        assertNull(result.matchedTemplateId)
+        assertEquals("debit", result.direction)
+    }
+
     @Test
     fun `disambiguates between several UPI modes on different accounts by account plus type`() {
         val body = "Sent Rs.500.00\n" +

@@ -15,6 +15,8 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.tasks.await
@@ -54,6 +56,7 @@ class SmsProcessingWorker(
         val smsBody = inputData.getString(KEY_SMS_BODY) ?: return Result.failure()
         val smsTimestamp = inputData.getLong(KEY_SMS_TIMESTAMP, System.currentTimeMillis())
         val fingerprint = inputData.getString(KEY_SMS_FINGERPRINT) ?: return Result.failure()
+        val smsSender = inputData.getString(KEY_SMS_SENDER)
 
         val prefs = applicationContext.getSharedPreferences(
             SmsReceiver.FLUTTER_PREFS, Context.MODE_PRIVATE
@@ -88,12 +91,17 @@ class SmsProcessingWorker(
             val accounts = fetchAccounts(db, uid)
             val paymentModes = fetchPaymentModes(db, uid)
             val creditCardAccounts = fetchCreditCardAccounts(db, uid)
+            // Shared library of shapes learned from any user's past
+            // AI-parsed SMS — see the template-learning block in
+            // callClaudeApi below. Mirrors sms_service.dart.
+            val smsTemplates = fetchSmsTemplates(db)
 
             val txDate = Date(smsTimestamp)
             val sourceMessageHash = computeSmsHash(smsBody)
 
             val localParser = LocalSmsParser.loadFromAssets(applicationContext)
-            val local = localParser.parse(smsBody, accounts, paymentModes)
+            val local = localParser.parse(smsBody, smsSender, accounts, paymentModes, smsTemplates)
+            local.matchedTemplateId?.let { recordSmsTemplateMatch(db, it) }
 
             // Firestore-side dedup on top of the device-local fingerprint check
             // above — catches the case where app data was cleared/reinstalled.
@@ -128,7 +136,19 @@ class SmsProcessingWorker(
                             local.referenceNumber,
                         )
                     } else {
-                        callClaudeApi(apiKey, smsBody, accounts, paymentModes)
+                        callClaudeApi(apiKey, smsBody, accounts, paymentModes, smsSender)
+                    }
+                }
+                aiParsed?.learnedTemplate?.let { learned ->
+                    // Publish to the shared library so the next SMS of this
+                    // exact shape — this user's or any other's — matches
+                    // locally, no AI call needed. Already passed
+                    // self-consistency validation in buildLearnedTemplate;
+                    // a failure here is a transient Firestore issue, not a
+                    // reason to lose the transaction itself.
+                    try {
+                        upsertSmsTemplate(db, learned)
+                    } catch (_: Exception) {
                     }
                 }
             }
@@ -304,6 +324,76 @@ class SmsProcessingWorker(
                 .mapNotNull { doc -> doc.data?.toMutableMap()?.also { it["id"] = doc.id } }
         }
 
+    // Top-level (not user-scoped): learned SMS templates are shared across
+    // every Ledger user — see SmsTemplate.kt and
+    // FirestoreService.fetchSmsTemplates in firestore_service.dart, which
+    // this mirrors field-for-field.
+    private suspend fun fetchSmsTemplates(db: FirebaseFirestore, limit: Long = 300) =
+        withContext(Dispatchers.IO) {
+            db.collection("smsTemplates")
+                .orderBy("matchCount", Query.Direction.DESCENDING)
+                .limit(limit)
+                .get().await().documents
+                .mapNotNull { doc ->
+                    val data = doc.data ?: return@mapNotNull null
+                    SmsTemplate(
+                        id = doc.id,
+                        bank = data["bank"] as? String ?: "",
+                        bankCode = data["bankCode"] as? String ?: "",
+                        transactionType = data["transactionType"] as? String ?: "other",
+                        direction = data["direction"] as? String,
+                        paymentMethod = data["paymentMethod"] as? String,
+                        txnCategoryHint = data["txnCategoryHint"] as? String,
+                        skeleton = data["skeleton"] as? String ?: "",
+                        templateConfidence = (data["templateConfidence"] as? Number)?.toDouble() ?: 0.0,
+                        matchCount = (data["matchCount"] as? Number)?.toInt() ?: 0,
+                    )
+                }
+        }
+
+    private fun smsTemplateId(bankCode: String, skeleton: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest("$bankCode|$skeleton".toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }.take(32)
+    }
+
+    private suspend fun upsertSmsTemplate(db: FirebaseFirestore, template: SmsTemplate) {
+        withContext(Dispatchers.IO) {
+            val id = smsTemplateId(template.bankCode, template.skeleton)
+            val data = mapOf(
+                "bank" to template.bank,
+                "bankCode" to template.bankCode,
+                "transactionType" to template.transactionType,
+                "direction" to template.direction,
+                "paymentMethod" to template.paymentMethod,
+                "txnCategoryHint" to template.txnCategoryHint,
+                "skeleton" to template.skeleton,
+                "templateConfidence" to template.templateConfidence,
+                "matchCount" to FieldValue.increment(1),
+                "createdAt" to Timestamp(Date()),
+                "lastMatchedAt" to Timestamp(Date()),
+            )
+            db.collection("smsTemplates").document(id)
+                .set(data, SetOptions.merge()).await()
+        }
+    }
+
+    private suspend fun recordSmsTemplateMatch(db: FirebaseFirestore, templateId: String) {
+        try {
+            withContext(Dispatchers.IO) {
+                db.collection("smsTemplates").document(templateId).update(
+                    mapOf(
+                        "matchCount" to FieldValue.increment(1),
+                        "lastMatchedAt" to Timestamp(Date()),
+                    )
+                ).await()
+            }
+        } catch (_: Exception) {
+            // Best-effort health signal — never worth failing the whole SMS
+            // processing job over.
+        }
+    }
+
     private suspend fun transactionExistsByExternalRef(
         db: FirebaseFirestore,
         uid: String,
@@ -387,6 +477,7 @@ class SmsProcessingWorker(
         val paymentModeId: String?,
         val categorySlug: String,
         val confidence: Double,
+        val learnedTemplate: SmsTemplate? = null,
     )
 
     private suspend fun callClaudeApi(
@@ -394,6 +485,7 @@ class SmsProcessingWorker(
         smsBody: String,
         accounts: List<Map<String, Any?>>,
         paymentModes: List<Map<String, Any?>>,
+        sender: String?,
     ): ParsedSms? = withContext(Dispatchers.IO) {
         val accountsJson = accounts.joinToString(",") { a ->
             """{"id":"${a["id"]}","title":"${a["title"]}","bank":"${a["bankName"]}","last6":"${a["lastSixDigits"]}"}"""
@@ -401,6 +493,7 @@ class SmsProcessingWorker(
         val modesJson = paymentModes.joinToString(",") { m ->
             """{"id":"${m["id"]}","type":"${m["type"]}","last4":"${m["lastFourDigits"] ?: ""}","upiId":"${m["upiId"] ?: ""}"}"""
         }
+        val senderLine = if (!sender.isNullOrEmpty()) "\nSMS sender/header id: \"$sender\"" else ""
 
         val prompt = """
 You are a financial SMS parser for Indian banking. Parse the SMS and return ONLY valid JSON with no markdown or explanation.
@@ -408,11 +501,13 @@ You are a financial SMS parser for Indian banking. Parse the SMS and return ONLY
 Accounts: [$accountsJson]
 PaymentModes: [$modesJson]
 
-SMS: "$smsBody"
+SMS: "$smsBody"$senderLine
 
 $SPECIAL_CASES
 
-$RESPONSE_SCHEMA""".trimIndent()
+$TEMPLATE_INSTRUCTIONS
+
+$RESPONSE_SCHEMA_WITH_TEMPLATE""".trimIndent()
 
         val requestBody = JSONObject().apply {
             put("model", "claude-haiku-4-5-20251001")
@@ -454,19 +549,62 @@ $RESPONSE_SCHEMA""".trimIndent()
 
             val accountId = parsed.optString("accountId").takeIf { it.isNotEmpty() && it != "null" }
             val paymentModeId = parsed.optString("paymentModeId").takeIf { it.isNotEmpty() && it != "null" }
+            val amount = parsed.optDouble("amount", 0.0)
 
             ParsedSms(
                 title = parsed.optString("title", "Transaction"),
-                amount = parsed.optDouble("amount", 0.0),
+                amount = amount,
                 type = parsed.optString("type", "expense"),
                 accountId = accountId,
                 paymentModeId = paymentModeId,
                 categorySlug = parsed.optString("suggestedCategorySlug", "other"),
                 confidence = confidence,
+                learnedTemplate = buildLearnedTemplate(
+                    parsed.optJSONObject("template"),
+                    sourceBody = smsBody,
+                    aiAmount = amount,
+                ),
             )
         } catch (_: Exception) {
             null
         }
+    }
+
+    // Validates and converts the model's raw `template` JSON into an
+    // SmsTemplate, or null if it isn't safe to publish to the shared
+    // template library. See _buildLearnedTemplate in
+    // lib/services/ai/claude_service.dart for the full rationale — the
+    // critical check is the same: the skeleton must correctly re-parse
+    // the exact SMS it was generalized from, with an amount matching what
+    // the model itself reported.
+    private fun buildLearnedTemplate(
+        template: JSONObject?,
+        sourceBody: String,
+        aiAmount: Double,
+    ): SmsTemplate? {
+        if (template == null) return null
+
+        val skeleton = template.optStringOrNull("skeleton") ?: return null
+        val templateConfidence = template.optDouble("confidence", 0.0)
+        if (skeleton.isEmpty() || templateConfidence < MIN_TEMPLATE_CONFIDENCE) return null
+
+        val compiled = SmsTemplateCompiler.compile(skeleton) ?: return null
+        val selfExtraction = compiled.match(sourceBody) ?: return null
+        val selfAmount = selfExtraction.amount ?: return null
+        if (kotlin.math.abs(selfAmount - aiAmount) > 0.01) return null
+
+        return SmsTemplate(
+            id = "", // caller derives the deterministic doc id
+            bank = template.optString("bank", ""),
+            bankCode = template.optString("bankCode", "").uppercase(),
+            transactionType = template.optString("transactionType", "other"),
+            direction = template.optStringOrNull("direction"),
+            paymentMethod = template.optStringOrNull("paymentMethod"),
+            txnCategoryHint = template.optStringOrNull("txnCategoryHint"),
+            skeleton = skeleton,
+            templateConfidence = templateConfidence,
+            matchCount = 0,
+        )
     }
 
     // Medium-confidence fallback: the local parser already extracted some
@@ -712,12 +850,14 @@ $RESPONSE_SCHEMA""".trimIndent()
         const val KEY_SMS_BODY = "sms_body"
         const val KEY_SMS_TIMESTAMP = "sms_timestamp"
         const val KEY_SMS_FINGERPRINT = "sms_fingerprint"
+        const val KEY_SMS_SENDER = "sms_sender"
 
         private const val P = "flutter."
         private const val CHANNEL_ID = "ledger_sms"
         private const val CHANNEL_NAME = "Auto-detected Transactions"
         private const val FOREGROUND_NOTIF_ID = 99
         private const val CONFIDENCE_THRESHOLD = 0.4
+        private const val MIN_TEMPLATE_CONFIDENCE = 0.75
 
         // Kept identical to lib/services/ai/claude_service.dart's prompt
         // fragments of the same name — a credit card bill payment settles
@@ -739,6 +879,35 @@ $RESPONSE_SCHEMA""".trimIndent()
   "confidence": float 0.0-1.0
 }"""
 
+        // Only used by callClaudeApi — the full-SMS path, reached only when
+        // nothing local (static rule or a previously learned template)
+        // already recognized this message's shape. Kept identical to
+        // _templateInstructions/_responseSchemaWithTemplate in
+        // lib/services/ai/claude_service.dart.
+        private const val TEMPLATE_INSTRUCTIONS = """Additionally, generalize this SMS into a reusable template for future messages of the exact same shape from the same bank. Every part of the message that would differ in another message of this shape (amount, date, reference number, account digits, payee name, phone numbers, etc.) must be replaced by exactly one placeholder token from this fixed set: {amount} {refno} {acct_last4} {acct_last6} {card_last4} {phone} {date} {time} {merchant} {vpa} {bank_name} {balance}. Everything else — fixed wording, punctuation, line breaks — must be copied verbatim from the original message. Two placeholders must never sit directly next to each other with no literal text between them. The skeleton must include an {amount} placeholder."""
+
+        private const val RESPONSE_SCHEMA_WITH_TEMPLATE = """Return JSON:
+{
+  "title": "merchant or description (max 30 chars)",
+  "amount": number,
+  "type": "expense" or "income",
+  "accountId": "matching account id or null",
+  "paymentModeId": "matching payment mode id or null",
+  "suggestedCategorySlug": one of [food, transport, entertainment, shopping, bills, health, salary, investment, groceries, education, travel, transfer, other],
+  "confidence": float 0.0-1.0,
+  "template": {
+    "bank": "HDFC Bank" or null if unidentifiable,
+    "bankCode": "short uppercase token identifying the bank from the sender id or message, e.g. HDFCBK, SBIINB, ICICIB, or null",
+    "transactionType": one of [upi_debit, upi_credit, card_purchase, card_bill_payment, atm_withdrawal, bank_debit, bank_credit, refund, emandate, balance_inquiry, other],
+    "direction": "debit" or "credit" or null,
+    "paymentMethod": one of [upi, creditCard, debitCard, bankTransfer, atm, cash] or null,
+    "txnCategoryHint": one of [creditCardPurchase, creditCardPayment, refund, expense] or null -- only when transactionType implies one of these, otherwise null,
+    "skeleton": "the generalized message with placeholders, see instructions above",
+    "constantVsVariable": "one sentence describing what is fixed boilerplate vs what varies message to message",
+    "confidence": float 0.0-1.0 for how confidently this skeleton generalizes -- low if the message is ambiguous or unusual, or you are unsure a variable span was correctly identified
+  } or null if this message is too unusual/ambiguous to safely generalize
+}"""
+
         // Kept identical to redactSensitiveDigits in
         // lib/core/utils/sms_redaction.dart — masks digit runs of 6+
         // characters (account numbers, balance figures) near account/
@@ -757,4 +926,10 @@ $RESPONSE_SCHEMA""".trimIndent()
             }
         }
     }
+}
+
+private fun JSONObject.optStringOrNull(key: String): String? {
+    if (!has(key) || isNull(key)) return null
+    val value = optString(key)
+    return value.ifEmpty { null }
 }
