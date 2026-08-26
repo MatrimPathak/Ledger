@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/services.dart' show rootBundle;
 import '../../models/account.dart';
 import '../../models/payment_mode.dart';
+import '../../models/sms_template.dart';
 
 /// Result of running the declarative rule set (assets/sms_patterns/
 /// bank_patterns.json) against a single SMS body. Never throws — an SMS
@@ -17,7 +18,10 @@ class LocalParseResult {
   final String? accountLastDigits;
   final String? matchedAccountId;
   final String? matchedPaymentModeId;
-  final String matchedRuleId; // rule id, or 'none'
+  final String matchedRuleId; // static rule id, 'none', or 'template'
+  // Set only when matchedRuleId == 'template' — the learned SmsTemplate.id
+  // that matched, so the caller can bump its matchCount/lastMatchedAt.
+  final String? matchedTemplateId;
   final double confidence; // 0.0-1.0, see LocalSmsParser's rubric doc comment
 
   const LocalParseResult({
@@ -31,6 +35,7 @@ class LocalParseResult {
     this.matchedAccountId,
     this.matchedPaymentModeId,
     required this.matchedRuleId,
+    this.matchedTemplateId,
     required this.confidence,
   });
 
@@ -94,8 +99,10 @@ class LocalSmsParser {
 
   LocalParseResult parse(
     String body, {
+    String? sender,
     List<Account> accounts = const [],
     List<PaymentMode> paymentModes = const [],
+    List<SmsTemplate> templates = const [],
   }) {
     final lower = body.toLowerCase();
     final rules = (_rules['rules'] as List).cast<Map<String, dynamic>>();
@@ -108,22 +115,56 @@ class LocalSmsParser {
       }
     }
 
-    final amount = _extractAmount(body);
-    final refNumber = matchedRule != null
-        ? _extractGroup(body, matchedRule['refNumberRegex'] as String?)
-        : null;
-    final merchant = matchedRule != null
-        ? _extractGroup(body, matchedRule['merchantRegex'] as String?)
-        : null;
+    double? amount;
+    String? refNumber;
+    String? merchant;
+    String? matchedRuleId;
+    String? matchedTemplateId;
+    String? templateDirection;
+    String? templatePaymentMethod;
+    String? templateTxnCategoryHint;
+
+    if (matchedRule != null) {
+      amount = _extractAmount(body);
+      refNumber = _extractGroup(body, matchedRule['refNumberRegex'] as String?);
+      merchant = _extractGroup(body, matchedRule['merchantRegex'] as String?);
+      matchedRuleId = matchedRule['id'] as String?;
+    } else {
+      // Layer 3: no hand-written rule fit this message — try templates
+      // learned from a previous novel SMS (see ClaudeService.
+      // parseSmsTransaction) before giving up on local parsing entirely.
+      // A single combined-regex match extracts amount/ref/merchant
+      // together, rather than the independent field regexes a static
+      // rule uses, since the whole template shape is what was validated
+      // at learn time.
+      for (final template in templates) {
+        if (!template.senderMatches(sender)) continue;
+        final extraction = template.tryMatch(body);
+        if (extraction == null) continue;
+        amount = extraction.amount;
+        refNumber = extraction.referenceNumber;
+        merchant = extraction.merchantCandidate;
+        matchedRuleId = 'template';
+        matchedTemplateId = template.id;
+        templateDirection = template.direction;
+        templatePaymentMethod = template.paymentMethod;
+        templateTxnCategoryHint = template.txnCategoryHint;
+        break;
+      }
+      amount ??= _extractAmount(body);
+    }
+
     final lastDigitsRegex = _accountLastDigitsRegex;
     final lastDigits =
         lastDigitsRegex != null ? _firstMatchGroup(body, lastDigitsRegex) : null;
 
-    String? direction = matchedRule?['direction'] as String?;
+    String? direction = matchedRule?['direction'] as String? ?? templateDirection;
     direction ??= _inferDirectionFromKeywords(lower);
 
-    final paymentMethod = matchedRule?['paymentMethod'] as String?;
-    final txnCategoryHint = matchedRule?['txnCategoryHint'] as String?;
+    final paymentMethod =
+        matchedRule?['paymentMethod'] as String? ?? templatePaymentMethod;
+    final txnCategoryHint =
+        matchedRule?['txnCategoryHint'] as String? ?? templateTxnCategoryHint;
 
     String? matchedAccountId;
     String? matchedPaymentModeId;
@@ -146,6 +187,27 @@ class LocalSmsParser {
       }
     }
 
+    // A UPI (or bank-transfer) payment mode has no digits of its own to
+    // match against — a UPI ID is a VPA, not an account number — so when a
+    // user has several UPI modes on different accounts, the digit loop
+    // above can never tell them apart. The SMS's only reliable signal for
+    // which one was used is the bank account it names, which is already
+    // resolved as matchedAccountId above; disambiguate by account + type
+    // instead. Ambiguous only if the user has two modes of the same type
+    // on the same account, which the SMS text itself can't resolve either.
+    if (matchedPaymentModeId == null &&
+        matchedAccountId != null &&
+        paymentMethod != null) {
+      final accountMode = paymentModes
+          .where((m) =>
+              m.accountId == matchedAccountId && m.type.name == paymentMethod)
+          .firstOrNull;
+      if (accountMode != null) {
+        matchedPaymentModeId = accountMode.id;
+        lastDigitsMatchedKnownInstrument = true;
+      }
+    }
+
     final confidence = _score(
       hasAmount: amount != null,
       hasDirection: direction != null,
@@ -165,7 +227,8 @@ class LocalSmsParser {
       accountLastDigits: lastDigits,
       matchedAccountId: matchedAccountId,
       matchedPaymentModeId: matchedPaymentModeId,
-      matchedRuleId: matchedRule?['id'] as String? ?? 'none',
+      matchedRuleId: matchedRuleId ?? 'none',
+      matchedTemplateId: matchedTemplateId,
       confidence: confidence,
     );
   }
@@ -188,7 +251,11 @@ class LocalSmsParser {
   double? _extractAmount(String body) {
     final match = _amountRegex.firstMatch(body);
     if (match == null) return null;
-    final raw = match.group(1)?.replaceAll(',', '');
+    // Two alternatives, each with its own capture group: "Rs./INR <amount>"
+    // (group 1) or, for banks that state the bare amount with no currency
+    // prefix at all (e.g. "debited by 4710.00"), "by/with/of/for <amount>"
+    // (group 2) — only one of the two is ever populated per match.
+    final raw = (match.group(1) ?? match.group(2))?.replaceAll(',', '');
     if (raw == null) return null;
     return double.tryParse(raw);
   }
@@ -197,7 +264,10 @@ class LocalSmsParser {
     if (pattern == null) return null;
     final regex = RegExp(pattern, caseSensitive: false);
     final match = regex.firstMatch(body);
-    final group = match?.group(1)?.trim();
+    // Collapse whitespace runs (e.g. a stray double space in the source
+    // SMS) so an extracted merchant name doesn't carry it into the UI.
+    final group =
+        match?.group(1)?.trim().replaceAll(RegExp(r'\s+'), ' ');
     return (group == null || group.isEmpty) ? null : group;
   }
 

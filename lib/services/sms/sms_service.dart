@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:another_telephony/telephony.dart';
 import 'package:collection/collection.dart';
@@ -189,15 +190,33 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     final accounts = await firestoreService.fetchAccounts(uid);
     final paymentModes = await firestoreService.fetchPaymentModes(uid);
     final creditCardAccounts = await firestoreService.fetchCreditCardAccounts(uid);
+    // Shared library of shapes learned from any user's past AI-parsed SMS
+    // — see ClaudeService.parseSmsTransaction. Fetched fresh per SMS
+    // rather than cached process-wide, since a background isolate is
+    // typically short-lived anyway and this keeps the match set current.
+    final smsTemplates = await firestoreService.fetchSmsTemplates();
 
     final txDate = smsTimestamp != null
         ? DateTime.fromMillisecondsSinceEpoch(smsTimestamp)
         : DateTime.now();
     final sourceMessageHash = computeSmsHash(body);
 
-    // Layer 2/3: deterministic local parsing + confidence scoring.
+    // Layer 2/3: deterministic local parsing + confidence scoring, then a
+    // learned-template match for shapes no static rule covers yet.
     final parser = await LocalSmsParser.load();
-    final localResult = parser.parse(body, accounts: accounts, paymentModes: paymentModes);
+    final localResult = parser.parse(
+      body,
+      sender: message.address,
+      accounts: accounts,
+      paymentModes: paymentModes,
+      templates: smsTemplates,
+    );
+    final matchedTemplateId = localResult.matchedTemplateId;
+    if (matchedTemplateId != null) {
+      // Fire-and-forget health signal — never block/fail transaction
+      // creation over an analytics increment.
+      unawaited(firestoreService.recordSmsTemplateMatch(matchedTemplateId));
+    }
 
     // Firestore-side dedup, on top of the device-local fingerprint above —
     // catches the case where app data was cleared/reinstalled and the
@@ -255,9 +274,19 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
                 accounts: accounts,
                 paymentModes: paymentModes,
                 cacheKey: sourceMessageHash,
+                sender: message.address,
               );
         if (parsed != null) {
           aiParsed = ClaudeParsedResult(parsed);
+          final learnedTemplate = parsed.learnedTemplate;
+          if (learnedTemplate != null) {
+            // Publish to the shared library so the next SMS of this exact
+            // shape — this user's or any other's — matches locally, no AI
+            // call needed. Already passed self-consistency validation in
+            // ClaudeService; a failure here is a transient Firestore issue,
+            // not a reason to lose the transaction itself.
+            unawaited(firestoreService.upsertSmsTemplate(learnedTemplate));
+          }
         }
       }
     }

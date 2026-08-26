@@ -1,10 +1,13 @@
+import 'dart:convert';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' hide Category;
 import '../../models/account.dart';
 import '../../models/category.dart';
 import '../../models/credit_card_account.dart';
 import '../../models/merchant.dart';
 import '../../models/payment_mode.dart';
+import '../../models/sms_template.dart';
 import '../../models/subscription.dart';
 import '../../models/transaction.dart' as app_model;
 import '../../models/user_profile.dart';
@@ -59,6 +62,13 @@ class FirestoreService {
 
   CollectionReference _subscriptions(String uid) =>
       _userDoc(uid).collection('subscriptions');
+
+  // Top-level (not user-scoped): learned SMS templates are shared across
+  // every Ledger user, since a template contains no personal data — only
+  // a bank's fixed message wording plus placeholder markers. Once any
+  // user's phone sees a new bank/format and the AI generalizes it, every
+  // other user's local parser can match it too, without another AI call.
+  CollectionReference get _smsTemplates => _db.collection('smsTemplates');
 
   // User profile
   Future<UserProfile?> getProfile(String uid) async {
@@ -348,6 +358,51 @@ class FirestoreService {
         .limit(1)
         .get();
     return snap.docs.isNotEmpty;
+  }
+
+  // Learned SMS templates (self-improving local-parsing tier — see
+  // lib/models/sms_template.dart and ClaudeService.parseSmsTransaction).
+
+  /// Fetches the shared template library for local (offline, no-AI-call)
+  /// matching in LocalSmsParser. Ordered by matchCount so the templates
+  /// most likely to matter — the shapes many users' phones have already
+  /// seen — are the ones kept if [limit] ever needs tightening; a few
+  /// hundred small docs is cheap for a single read.
+  Future<List<SmsTemplate>> fetchSmsTemplates({int limit = 300}) async {
+    final snap =
+        await _smsTemplates.orderBy('matchCount', descending: true).limit(limit).get();
+    return snap.docs.map(SmsTemplate.fromFirestore).toList();
+  }
+
+  /// Deterministic doc id from bank code + skeleton, so learning the same
+  /// shape twice (this user re-encountering it, or a different user
+  /// learning it independently before this one synced) upserts the same
+  /// doc instead of creating a duplicate.
+  static String smsTemplateId(String bankCode, String skeleton) {
+    final normalized = '$bankCode|$skeleton';
+    return sha256.convert(utf8.encode(normalized)).toString().substring(0, 32);
+  }
+
+  /// Publishes a newly learned template to the shared library, or — if
+  /// this exact shape was already learned (by this user or another one) —
+  /// bumps its match count instead of duplicating it. [template.id] is
+  /// ignored; the doc id is always derived from bankCode+skeleton so this
+  /// upsert is idempotent no matter who calls it or how many times.
+  Future<void> upsertSmsTemplate(SmsTemplate template) async {
+    final id = smsTemplateId(template.bankCode, template.skeleton);
+    final data = template.toFirestore()
+      ..['matchCount'] = FieldValue.increment(1);
+    await _smsTemplates.doc(id).set(data, SetOptions(merge: true));
+  }
+
+  /// Fire-and-forget health signal: bumps matchCount/lastMatchedAt when a
+  /// cached template successfully matched an incoming SMS locally (as
+  /// opposed to at learn time, which upsertSmsTemplate already counts).
+  Future<void> recordSmsTemplateMatch(String templateId) async {
+    await _smsTemplates.doc(templateId).update({
+      'matchCount': FieldValue.increment(1),
+      'lastMatchedAt': Timestamp.fromDate(DateTime.now()),
+    });
   }
 
   Future<List<app_model.Transaction>> fetchTransactionsForAnalytics(

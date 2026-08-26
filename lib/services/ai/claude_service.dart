@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import '../../core/constants/app_constants.dart';
 import '../../models/account.dart';
 import '../../models/payment_mode.dart';
+import '../../models/sms_template.dart';
 
 export '../../core/utils/sms_redaction.dart' show redactSensitiveDigits;
 
@@ -24,6 +25,13 @@ class ParsedSmsTransaction {
   final String? suggestedCategorySlug;
   final double confidence; // 0.0 - 1.0
   final String? rawSms;
+  // Only ever set by parseSmsTransaction (the full-SMS, lowest-confidence
+  // path — exactly the case where no static rule or cached template
+  // already handled this shape). Already passed the self-consistency
+  // check in _buildLearnedTemplate: null here means either the AI didn't
+  // return a template, returned one below the confidence bar, or the
+  // template failed to correctly re-parse the very message it came from.
+  final SmsTemplate? learnedTemplate;
 
   const ParsedSmsTransaction({
     required this.title,
@@ -34,6 +42,7 @@ class ParsedSmsTransaction {
     this.suggestedCategorySlug,
     required this.confidence,
     this.rawSms,
+    this.learnedTemplate,
   });
 }
 
@@ -72,6 +81,39 @@ Return JSON:
   "paymentModeId": "matching payment mode id or null",
   "suggestedCategorySlug": one of [food, transport, entertainment, shopping, bills, health, salary, investment, groceries, education, travel, transfer, other],
   "confidence": float 0.0-1.0
+}''';
+
+// Only used by parseSmsTransaction — the full-SMS path, reached only when
+// nothing local (static rule or a previously learned template) already
+// recognized this message's shape. Asks the model to also generalize the
+// SMS into a reusable template, so the *next* message of this exact shape
+// — from this user or any other Ledger user, since templates are shared
+// and contain no personal data by construction — never needs an AI call
+// again. This is the "self-improving" tier of the parsing pipeline.
+const _templateInstructions = '''
+Additionally, generalize this SMS into a reusable template for future messages of the exact same shape from the same bank. Every part of the message that would differ in another message of this shape (amount, date, reference number, account digits, payee name, phone numbers, etc.) must be replaced by exactly one placeholder token from this fixed set: {amount} {refno} {acct_last4} {acct_last6} {card_last4} {phone} {date} {time} {merchant} {vpa} {bank_name} {balance}. Everything else — fixed wording, punctuation, line breaks — must be copied verbatim from the original message. Two placeholders must never sit directly next to each other with no literal text between them. The skeleton must include an {amount} placeholder.''';
+
+const _responseSchemaWithTemplate = '''
+Return JSON:
+{
+  "title": "merchant or description (max 30 chars)",
+  "amount": number,
+  "type": "expense" or "income",
+  "accountId": "matching account id or null",
+  "paymentModeId": "matching payment mode id or null",
+  "suggestedCategorySlug": one of [food, transport, entertainment, shopping, bills, health, salary, investment, groceries, education, travel, transfer, other],
+  "confidence": float 0.0-1.0,
+  "template": {
+    "bank": "HDFC Bank" or null if unidentifiable,
+    "bankCode": "short uppercase token identifying the bank from the sender id or message, e.g. HDFCBK, SBIINB, ICICIB, or null",
+    "transactionType": one of [upi_debit, upi_credit, card_purchase, card_bill_payment, atm_withdrawal, bank_debit, bank_credit, refund, emandate, balance_inquiry, other],
+    "direction": "debit" or "credit" or null,
+    "paymentMethod": one of [upi, creditCard, debitCard, bankTransfer, atm, cash] or null,
+    "txnCategoryHint": one of [creditCardPurchase, creditCardPayment, refund, expense] or null -- only when transactionType implies one of these, otherwise null,
+    "skeleton": "the generalized message with placeholders, see instructions above",
+    "constantVsVariable": "one sentence describing what is fixed boilerplate vs what varies message to message",
+    "confidence": float 0.0-1.0 for how confidently this skeleton generalizes -- low if the message is ambiguous or unusual, or you are unsure a variable span was correctly identified
+  } or null if this message is too unusual/ambiguous to safely generalize
 }''';
 
 class ClaudeService {
@@ -158,6 +200,12 @@ class ClaudeService {
     required List<Account> accounts,
     required List<PaymentMode> paymentModes,
     String? cacheKey,
+    // The SMS sender/header id (e.g. "VM-HDFCBK-T"), passed through so the
+    // model can identify a reliable bankCode for template matching even
+    // when the message body itself doesn't spell out a canonical bank
+    // name. Extraction/categorization don't need it — only template
+    // generation does.
+    String? sender,
   }) async {
     if (apiKey == AppConstants.claudeApiKeyPlaceholder || apiKey.isEmpty) {
       return null;
@@ -178,23 +226,29 @@ class ClaudeService {
         .map((m) => '{"id":"${m.id}","type":"${m.type.name}","last4":"${m.lastFourDigits ?? ''}","upiId":"${m.upiId ?? ''}"}')
         .join(',');
 
+    final senderLine = (sender != null && sender.isNotEmpty)
+        ? '\nSMS sender/header id: "$sender"'
+        : '';
+
     final prompt = '''
 You are a financial SMS parser for Indian banking. Parse the SMS and return ONLY valid JSON with no markdown or explanation.
 
 Accounts: [$accountsContext]
 PaymentModes: [$modesContext]
 
-SMS: "$smsBody"
+SMS: "$smsBody"$senderLine
 
 $_specialCases
 
-$_responseSchema''';
+$_templateInstructions
+
+$_responseSchemaWithTemplate''';
 
     ParsedSmsTransaction? result;
     try {
       final response = await _postWithRetry({
         'model': AppConstants.claudeSmsFastModel,
-        'max_tokens': 256,
+        'max_tokens': 512,
         'system': 'You are a financial SMS parser. Return ONLY valid JSON.',
         'messages': [
           {'role': 'user', 'content': prompt}
@@ -212,15 +266,21 @@ $_responseSchema''';
         if (confidence < AppConstants.smsConfidenceThreshold / 100.0) {
           result = null;
         } else {
+          final amount = (json['amount'] as num?)?.toDouble() ?? 0.0;
           result = ParsedSmsTransaction(
             title: json['title'] ?? 'Transaction',
-            amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
+            amount: amount,
             type: json['type'] ?? 'expense',
             accountId: json['accountId'],
             paymentModeId: json['paymentModeId'],
             suggestedCategorySlug: json['suggestedCategorySlug'],
             confidence: confidence,
             rawSms: smsBody,
+            learnedTemplate: _buildLearnedTemplate(
+              json['template'] as Map<String, dynamic>?,
+              sourceBody: smsBody,
+              aiAmount: amount,
+            ),
           );
         }
       }
@@ -232,6 +292,61 @@ $_responseSchema''';
 
     if (scopedKey != null) _cacheResult(scopedKey, result);
     return result;
+  }
+
+  static const double _minTemplateConfidence = 0.75;
+
+  /// Validates and converts the model's raw `template` JSON into an
+  /// [SmsTemplate], or null if it isn't safe to publish to the shared
+  /// template library. Never throws.
+  ///
+  /// The critical check is the last one: the skeleton must correctly
+  /// re-parse the exact SMS it was generalized from, and the amount that
+  /// comes back must match what the model itself reported for this
+  /// message. A skeleton that fails to reproduce its own source message
+  /// is very likely malformed (wrong placeholder type, a variable span
+  /// left as literal text, etc.) — publishing it to a collection every
+  /// user's local parser reads from would risk silently mis-parsing
+  /// other users' future transactions, so it's rejected rather than
+  /// trusted on the model's word alone.
+  static SmsTemplate? _buildLearnedTemplate(
+    Map<String, dynamic>? template, {
+    required String sourceBody,
+    required double aiAmount,
+  }) {
+    if (template == null) return null;
+
+    final skeleton = template['skeleton'] as String?;
+    final templateConfidence =
+        (template['confidence'] as num?)?.toDouble() ?? 0.0;
+    if (skeleton == null ||
+        skeleton.isEmpty ||
+        templateConfidence < _minTemplateConfidence) {
+      return null;
+    }
+
+    final compiled = SmsTemplateCompiler.compile(skeleton);
+    if (compiled == null) return null;
+
+    final selfExtraction = compiled.match(sourceBody);
+    if (selfExtraction == null || selfExtraction.amount == null) return null;
+    if ((selfExtraction.amount! - aiAmount).abs() > 0.01) return null;
+
+    final now = DateTime.now();
+    return SmsTemplate(
+      id: '', // caller (firestore_service.dart) derives the deterministic doc id
+      bank: template['bank'] as String? ?? '',
+      bankCode: (template['bankCode'] as String? ?? '').toUpperCase(),
+      transactionType: template['transactionType'] as String? ?? 'other',
+      direction: template['direction'] as String?,
+      paymentMethod: template['paymentMethod'] as String?,
+      txnCategoryHint: template['txnCategoryHint'] as String?,
+      skeleton: skeleton,
+      templateConfidence: templateConfidence,
+      matchCount: 0,
+      createdAt: now,
+      lastMatchedAt: now,
+    );
   }
 
   /// Medium-confidence fallback: the local parser already extracted some

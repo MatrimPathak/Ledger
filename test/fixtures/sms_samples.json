@@ -32,6 +32,36 @@
       }
     },
     {
+      "id": "upi_sent_debit_high_confidence",
+      "body": "Sent Rs.550.00\nFrom HDFC Bank A/C *4321\nTo Cafe Coffee Day\nOn 18-08-26\nRef 123456789012\nNot You?\nCall 18002586161/SMS BLOCK UPI to 7308080808",
+      "expected": {
+        "amount": 550.0,
+        "direction": "debit",
+        "paymentMethod": "upi",
+        "txnCategoryHint": null,
+        "referenceNumber": "123456789012",
+        "merchantCandidate": "Cafe Coffee Day",
+        "accountLastDigits": "4321",
+        "matchedRuleId": "upi_sent_debit",
+        "tier": "high"
+      }
+    },
+    {
+      "id": "sbi_upi_debit_no_currency_prefix_high_confidence",
+      "body": "Dear UPI user A/C X9786 debited by 4710.00 on date 25Jul26 trf to SAMBIT  DHAR Refno 620603908102 If not u? call-1800111109 for other services-18001234-SBI",
+      "expected": {
+        "amount": 4710.0,
+        "direction": "debit",
+        "paymentMethod": "upi",
+        "txnCategoryHint": null,
+        "referenceNumber": "620603908102",
+        "merchantCandidate": "SAMBIT DHAR",
+        "accountLastDigits": "9786",
+        "matchedRuleId": "upi_debit",
+        "tier": "high"
+      }
+    },
+    {
       "id": "bank_debit_neft_medium_confidence",
       "body": "INR 12000.00 debited from your account for NEFT transfer. Avl Bal INR 45000.00",
       "expected": {

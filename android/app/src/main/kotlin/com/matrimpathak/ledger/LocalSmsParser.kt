@@ -25,7 +25,11 @@ data class LocalParseResult(
     val accountLastDigits: String?,
     val matchedAccountId: String?,
     val matchedPaymentModeId: String?,
-    val matchedRuleId: String,
+    val matchedRuleId: String, // static rule id, "none", or "template"
+    // Set only when matchedRuleId == "template" — the learned
+    // SmsTemplate.id that matched, so the caller can bump its
+    // matchCount/lastMatchedAt.
+    val matchedTemplateId: String? = null,
     val confidence: Double,
 ) {
     val isHighConfidence: Boolean get() = confidence >= 0.80
@@ -52,20 +56,54 @@ class LocalSmsParser(private val rules: JSONObject) {
      */
     fun parse(
         body: String,
+        sender: String? = null,
         accounts: List<Map<String, Any?>> = emptyList(),
         paymentModes: List<Map<String, Any?>> = emptyList(),
+        templates: List<SmsTemplate> = emptyList(),
     ): LocalParseResult {
         val lower = body.lowercase()
         val matchedRule = ruleList.firstOrNull { ruleMatches(it, lower) }
 
-        val amount = extractAmount(body)
-        val refNumber = matchedRule?.optStringOrNull("refNumberRegex")?.let { extractGroup(body, it) }
-        val merchant = matchedRule?.optStringOrNull("merchantRegex")?.let { extractGroup(body, it) }
+        var amount: Double? = null
+        var refNumber: String? = null
+        var merchant: String? = null
+        var matchedRuleId: String? = null
+        var matchedTemplateId: String? = null
+        var templateDirection: String? = null
+        var templatePaymentMethod: String? = null
+        var templateTxnCategoryHint: String? = null
+
+        if (matchedRule != null) {
+            amount = extractAmount(body)
+            refNumber = matchedRule.optStringOrNull("refNumberRegex")?.let { extractGroup(body, it) }
+            merchant = matchedRule.optStringOrNull("merchantRegex")?.let { extractGroup(body, it) }
+            matchedRuleId = matchedRule.optString("id")
+        } else {
+            // Layer 3: no hand-written rule fit this message — try
+            // templates learned from a previous novel SMS (see
+            // SmsProcessingWorker's Claude call) before giving up on local
+            // parsing entirely. Mirrors local_sms_parser.dart.
+            for (template in templates) {
+                if (!template.senderMatches(sender)) continue
+                val extraction = template.tryMatch(body) ?: continue
+                amount = extraction.amount
+                refNumber = extraction.referenceNumber
+                merchant = extraction.merchantCandidate
+                matchedRuleId = "template"
+                matchedTemplateId = template.id
+                templateDirection = template.direction
+                templatePaymentMethod = template.paymentMethod
+                templateTxnCategoryHint = template.txnCategoryHint
+                break
+            }
+            if (amount == null) amount = extractAmount(body)
+        }
+
         val lastDigits = accountLastDigitsRegex?.let { firstGroup(body, it) }
 
-        val direction = matchedRule?.optStringOrNull("direction") ?: inferDirection(lower)
-        val paymentMethod = matchedRule?.optStringOrNull("paymentMethod")
-        val txnCategoryHint = matchedRule?.optStringOrNull("txnCategoryHint")
+        val direction = matchedRule?.optStringOrNull("direction") ?: templateDirection ?: inferDirection(lower)
+        val paymentMethod = matchedRule?.optStringOrNull("paymentMethod") ?: templatePaymentMethod
+        val txnCategoryHint = matchedRule?.optStringOrNull("txnCategoryHint") ?: templateTxnCategoryHint
 
         var matchedAccountId: String? = null
         var matchedPaymentModeId: String? = null
@@ -89,6 +127,23 @@ class LocalSmsParser(private val rules: JSONObject) {
             }
         }
 
+        // A UPI (or bank-transfer) payment mode has no digits of its own to
+        // match against — a UPI ID is a VPA, not an account number — so when
+        // a user has several UPI modes on different accounts, the digit
+        // loop above can never tell them apart. The SMS's only reliable
+        // signal for which one was used is the bank account it names,
+        // already resolved as matchedAccountId above; disambiguate by
+        // account + type instead. Mirrors local_sms_parser.dart.
+        if (matchedPaymentModeId == null && matchedAccountId != null && paymentMethod != null) {
+            val accountMode = paymentModes.firstOrNull {
+                it["accountId"] == matchedAccountId && it["type"] == paymentMethod
+            }
+            if (accountMode != null) {
+                matchedPaymentModeId = accountMode["id"] as? String
+                instrumentMatch = true
+            }
+        }
+
         var points = 0
         if (amount != null) points += 30
         if (direction != null) points += 20
@@ -107,7 +162,8 @@ class LocalSmsParser(private val rules: JSONObject) {
             accountLastDigits = lastDigits,
             matchedAccountId = matchedAccountId,
             matchedPaymentModeId = matchedPaymentModeId,
-            matchedRuleId = matchedRule?.optString("id") ?: "none",
+            matchedRuleId = matchedRuleId ?: "none",
+            matchedTemplateId = matchedTemplateId,
             confidence = points / 100.0,
         )
     }
@@ -124,14 +180,23 @@ class LocalSmsParser(private val rules: JSONObject) {
 
     private fun extractAmount(body: String): Double? {
         val match = amountRegex.find(body) ?: return null
-        val raw = match.groupValues.getOrNull(1)?.replace(",", "") ?: return null
+        // Two alternatives, each with its own capture group: "Rs./INR
+        // <amount>" (group 1) or, for banks that state the bare amount with
+        // no currency prefix at all (e.g. "debited by 4710.00"), "by/with/
+        // of/for <amount>" (group 2) — an unmatched Kotlin group yields ""
+        // rather than null, hence the isNotEmpty() check.
+        val group1 = match.groupValues.getOrNull(1)?.takeIf { it.isNotEmpty() }
+        val group2 = match.groupValues.getOrNull(2)?.takeIf { it.isNotEmpty() }
+        val raw = (group1 ?: group2)?.replace(",", "") ?: return null
         return raw.toDoubleOrNull()
     }
 
     private fun extractGroup(body: String, pattern: String): String? {
         val regex = Regex(pattern, RegexOption.IGNORE_CASE)
         val match = regex.find(body) ?: return null
-        val group = match.groupValues.getOrNull(1)?.trim()
+        // Collapse whitespace runs (e.g. a stray double space in the source
+        // SMS) so an extracted merchant name doesn't carry it into the UI.
+        val group = match.groupValues.getOrNull(1)?.trim()?.replace(Regex("""\s+"""), " ")
         return if (group.isNullOrEmpty()) null else group
     }
 
