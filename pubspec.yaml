@@ -1,7 +1,7 @@
 name: ledger
 description: A premium personal finance tracker.
 publish_to: 'none'
-version: 3.0.1+13
+version: 3.1.0+14
 
 environment:
   sdk: ^3.8.1
