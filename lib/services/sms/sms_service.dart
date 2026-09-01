@@ -16,6 +16,7 @@ import '../../core/constants/default_categories.dart';
 import '../../models/category.dart';
 import '../../models/transaction.dart' as tx_model;
 import '../../models/payment_mode.dart';
+import '../../models/sms_template.dart';
 import 'bank_sms_filter.dart';
 import 'local_sms_parser.dart';
 
@@ -194,7 +195,17 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
     // — see ClaudeService.parseSmsTransaction. Fetched fresh per SMS
     // rather than cached process-wide, since a background isolate is
     // typically short-lived anyway and this keeps the match set current.
-    final smsTemplates = await firestoreService.fetchSmsTemplates();
+    // This is a pure optimization (skip an AI call for a shape already
+    // learned) — never let it take down the whole handler. A permission
+    // error here (e.g. firestore.rules for smsTemplates not yet deployed
+    // to this project) must degrade to "no templates available" rather
+    // than aborting every SMS, static-rule matches included.
+    List<SmsTemplate> smsTemplates;
+    try {
+      smsTemplates = await firestoreService.fetchSmsTemplates();
+    } catch (_) {
+      smsTemplates = const [];
+    }
 
     final txDate = smsTimestamp != null
         ? DateTime.fromMillisecondsSinceEpoch(smsTimestamp)

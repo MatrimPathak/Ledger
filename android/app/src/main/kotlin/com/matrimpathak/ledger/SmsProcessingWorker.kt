@@ -93,8 +93,17 @@ class SmsProcessingWorker(
             val creditCardAccounts = fetchCreditCardAccounts(db, uid)
             // Shared library of shapes learned from any user's past
             // AI-parsed SMS — see the template-learning block in
-            // callClaudeApi below. Mirrors sms_service.dart.
-            val smsTemplates = fetchSmsTemplates(db)
+            // callClaudeApi below. Mirrors sms_service.dart. Pure
+            // optimization (skip an AI call for an already-learned shape)
+            // — must never take down the whole worker. A permission error
+            // (e.g. firestore.rules for smsTemplates not yet deployed to
+            // this project) degrades to "no templates available" rather
+            // than aborting every SMS, static-rule matches included.
+            val smsTemplates = try {
+                fetchSmsTemplates(db)
+            } catch (_: Exception) {
+                emptyList()
+            }
 
             val txDate = Date(smsTimestamp)
             val sourceMessageHash = computeSmsHash(smsBody)
