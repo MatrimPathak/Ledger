@@ -388,21 +388,31 @@ class FirestoreService {
   /// bumps its match count instead of duplicating it. [template.id] is
   /// ignored; the doc id is always derived from bankCode+skeleton so this
   /// upsert is idempotent no matter who calls it or how many times.
+  /// Best-effort: always called via `unawaited` from the SMS pipeline, so
+  /// swallow failures here rather than letting them surface as unhandled
+  /// Future errors — e.g. if firestore.rules for this collection hasn't
+  /// been deployed yet to this Firebase project, this must not spam crash
+  /// reporting on every single learned template.
   Future<void> upsertSmsTemplate(SmsTemplate template) async {
-    final id = smsTemplateId(template.bankCode, template.skeleton);
-    final data = template.toFirestore()
-      ..['matchCount'] = FieldValue.increment(1);
-    await _smsTemplates.doc(id).set(data, SetOptions(merge: true));
+    try {
+      final id = smsTemplateId(template.bankCode, template.skeleton);
+      final data = template.toFirestore()
+        ..['matchCount'] = FieldValue.increment(1);
+      await _smsTemplates.doc(id).set(data, SetOptions(merge: true));
+    } catch (_) {}
   }
 
   /// Fire-and-forget health signal: bumps matchCount/lastMatchedAt when a
   /// cached template successfully matched an incoming SMS locally (as
   /// opposed to at learn time, which upsertSmsTemplate already counts).
+  /// Best-effort for the same reason as upsertSmsTemplate above.
   Future<void> recordSmsTemplateMatch(String templateId) async {
-    await _smsTemplates.doc(templateId).update({
-      'matchCount': FieldValue.increment(1),
-      'lastMatchedAt': Timestamp.fromDate(DateTime.now()),
-    });
+    try {
+      await _smsTemplates.doc(templateId).update({
+        'matchCount': FieldValue.increment(1),
+        'lastMatchedAt': Timestamp.fromDate(DateTime.now()),
+      });
+    } catch (_) {}
   }
 
   Future<List<app_model.Transaction>> fetchTransactionsForAnalytics(
