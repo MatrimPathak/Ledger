@@ -47,8 +47,8 @@
       "keywords": ["upi"],
       "requireKeywords": ["debited"],
       "excludeKeywords": ["credited"],
-      "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "\\b(?:trf to|paid to|to vpa|to)\\s+([a-z0-9@.\\-_ ]{2,40}?)(?:\\s+on\\b|\\s+upi\\b|\\s+ref|\\.|,|$)"
+      "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})|\\bupi\\s+([0-9]{6,})\\b",
+      "merchantRegex": "\\b(?:trf to|paid to|to vpa|to)\\s+([a-z0-9@.\\-_ ]{2,40}?)(?:\\s+on\\b|\\s+upi\\b|\\s+ref|\\(|\\.|,|$)"
     },
     {
       "id": "upi_credit",
@@ -58,8 +58,8 @@
       "keywords": ["upi"],
       "requireKeywords": ["credited"],
       "excludeKeywords": ["debited"],
-      "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "\\b(?:trf from|received from|from vpa|from)\\s+([a-z0-9@.\\-_ ]{2,40}?)(?:\\s+on\\b|\\s+upi\\b|\\s+ref|\\.|,|$)"
+      "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})|\\bupi\\s+([0-9]{6,})\\b",
+      "merchantRegex": "\\b(?:trf from|received from|from vpa|from)\\s+([a-z0-9@.\\-_ ]{2,40}?)(?:\\s+on\\b|\\s+upi\\b|\\s+ref|\\(|\\.|,|$)"
     },
     {
       "id": "upi_sent_debit",
@@ -70,7 +70,7 @@
       "requireKeywords": [],
       "excludeKeywords": [],
       "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "\\bto\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\s+ref|\\.|,|$)"
+      "merchantRegex": "\\bto\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\s+ref|\\(|\\.|,|$)"
     },
     {
       "id": "credit_card_bill_payment",
@@ -92,7 +92,7 @@
       "requireKeywords": ["spent", "purchase", "used for", "txn of"],
       "excludeKeywords": ["bill payment received", "payment received", "bill paid"],
       "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "\\b(?:at|on)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\s+ref|\\.|,|$)"
+      "merchantRegex": "\\b(?:at|on)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\s+ref|\\(|\\.|,|$)"
     },
     {
       "id": "atm_withdrawal",
@@ -114,7 +114,7 @@
       "requireKeywords": [],
       "excludeKeywords": [],
       "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "\\b(?:from|by)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\s+ref|\\.|,|$)"
+      "merchantRegex": "\\b(?:from|by)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\s+ref|\\(|\\.|,|$)"
     },
     {
       "id": "bank_debit_generic",
@@ -125,7 +125,7 @@
       "requireKeywords": [],
       "excludeKeywords": ["credited"],
       "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "\\b(?:to|towards)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\s+ref|\\.|,|$)"
+      "merchantRegex": "\\b(?:to|towards)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\s+ref|\\(|\\.|,|$)"
     },
     {
       "id": "bank_credit_generic",
@@ -136,7 +136,7 @@
       "requireKeywords": [],
       "excludeKeywords": ["debited"],
       "refNumberRegex": "ref(?:erence)?\\.?\\s*(?:no\\.?|number)?[:\\s#]*([a-z0-9]{6,})",
-      "merchantRegex": "\\b(?:from|by)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\s+ref|\\.|,|$)"
+      "merchantRegex": "\\b(?:from|by)\\s+([a-z0-9 .&_-]{2,40}?)(?:\\s+on\\b|\\s+ref|\\(|\\.|,|$)"
     }
   ]
 }

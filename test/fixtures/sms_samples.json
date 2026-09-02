@@ -62,6 +62,21 @@
       }
     },
     {
+      "id": "hdfc_credit_alert_parenthesized_upi_ref_high_confidence",
+      "body": "Credit Alert!\nRs.1834.00 credited to HDFC Bank A/c XX5245 on 02-09-26 from VPA sakkurusrija1995@okaxis (UPI 661174420402)",
+      "expected": {
+        "amount": 1834.0,
+        "direction": "credit",
+        "paymentMethod": "upi",
+        "txnCategoryHint": null,
+        "referenceNumber": "661174420402",
+        "merchantCandidate": "sakkurusrija1995@okaxis",
+        "accountLastDigits": "5245",
+        "matchedRuleId": "upi_credit",
+        "tier": "high"
+      }
+    },
+    {
       "id": "bank_debit_neft_medium_confidence",
       "body": "INR 12000.00 debited from your account for NEFT transfer. Avl Bal INR 45000.00",
       "expected": {

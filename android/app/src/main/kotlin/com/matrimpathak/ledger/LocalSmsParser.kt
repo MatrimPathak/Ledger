@@ -194,9 +194,16 @@ class LocalSmsParser(private val rules: JSONObject) {
     private fun extractGroup(body: String, pattern: String): String? {
         val regex = Regex(pattern, RegexOption.IGNORE_CASE)
         val match = regex.find(body) ?: return null
+        // Most patterns have exactly one capture group. A few (e.g. a
+        // reference-number pattern with a second alternative for a
+        // different bank's convention) have two, of which only one
+        // participates per match — an unmatched group yields "" rather
+        // than null, hence the isNotEmpty() check.
+        val group1 = match.groupValues.getOrNull(1)?.takeIf { it.isNotEmpty() }
+        val group2 = match.groupValues.getOrNull(2)?.takeIf { it.isNotEmpty() }
         // Collapse whitespace runs (e.g. a stray double space in the source
         // SMS) so an extracted merchant name doesn't carry it into the UI.
-        val group = match.groupValues.getOrNull(1)?.trim()?.replace(Regex("""\s+"""), " ")
+        val group = (group1 ?: group2)?.trim()?.replace(Regex("""\s+"""), " ")
         return if (group.isNullOrEmpty()) null else group
     }
 
