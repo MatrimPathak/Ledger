@@ -157,19 +157,27 @@ Future<Category> resolveOrCreateCategory({
 //    firing 20 "processing…" toasts is noise); the caller shows one
 //    summary instead.
 //
-// Returns true iff this call created a transaction, so callers can count
-// results — the live path (isManualSync: false) ignores the return value.
+// Returns an [SmsHandlerOutcome] describing what happened, so callers can
+// count results — the live path (isManualSync: false) ignores the return
+// value. `created` is the only outcome that produced a transaction;
+// `skipped` covers every deliberate no-op (not a bank SMS, already handled,
+// nothing usable extracted); `failed` means the attempt threw partway
+// through — distinct from `skipped` so a caller like
+// SmsService.syncMissedSms can tell "nothing new to do" apart from
+// "something went wrong".
+enum SmsHandlerOutcome { created, skipped, failed }
+
 @pragma('vm:entry-point')
-Future<bool> backgroundSmsHandler(
+Future<SmsHandlerOutcome> backgroundSmsHandler(
   SmsMessage message, {
   bool isManualSync = false,
 }) async {
   final body = message.body ?? '';
-  if (!await BankSmsFilter.looksLikeBankSms(body)) return false;
+  if (!await BankSmsFilter.looksLikeBankSms(body)) return SmsHandlerOutcome.skipped;
 
   final prefs = await SharedPreferences.getInstance();
   if (!isManualSync && prefs.getBool(AppConstants.prefKeyAutoDetect) != true) {
-    return false;
+    return SmsHandlerOutcome.skipped;
   }
 
   // Timestamp watermark: skip if already processed via catch-up. Manual
@@ -177,20 +185,20 @@ Future<bool> backgroundSmsHandler(
   final smsTimestamp = message.date;
   if (!isManualSync && smsTimestamp != null) {
     final lastProcessed = prefs.getInt(AppConstants.prefKeyLastSmsTimestamp) ?? 0;
-    if (smsTimestamp <= lastProcessed) return false;
+    if (smsTimestamp <= lastProcessed) return SmsHandlerOutcome.skipped;
   }
 
   // Fingerprint dedup: handles null-date messages and concurrent isolate
   // races. Manual sync skips this — see the function doc comment above.
   final fingerprint = _smsFingerprint(message);
-  if (!isManualSync && _isAlreadyProcessed(fingerprint, prefs)) return false;
+  if (!isManualSync && _isAlreadyProcessed(fingerprint, prefs)) return SmsHandlerOutcome.skipped;
 
   // E-mandate / NACH pre-debit notifications are not real transactions — the
   // actual debit arrives as a separate SMS. Skip them entirely so they never
   // appear in the transaction list.
   if (_isPreDebitNotification(body)) {
     await _markProcessed(fingerprint, prefs);
-    return false;
+    return SmsHandlerOutcome.skipped;
   }
 
   // Honour the user's notification preference in the background isolate.
@@ -215,7 +223,7 @@ Future<bool> backgroundSmsHandler(
       if (!isManualSync) {
         await NotificationService.showSmsErrorNotification('Not signed in — open Ledger once to re-authenticate.');
       }
-      return false;
+      return SmsHandlerOutcome.skipped;
     }
 
     final firestoreService = FirestoreService();
@@ -268,14 +276,14 @@ Future<bool> backgroundSmsHandler(
           uid, localResult.referenceNumber!);
       if (exists) {
         await _markProcessed(fingerprint, prefs);
-        return false;
+        return SmsHandlerOutcome.skipped;
       }
     } else {
       final exists = await firestoreService.transactionExistsByHashNearby(
           uid, sourceMessageHash, txDate);
       if (exists) {
         await _markProcessed(fingerprint, prefs);
-        return false;
+        return SmsHandlerOutcome.skipped;
       }
     }
 
@@ -351,7 +359,7 @@ Future<bool> backgroundSmsHandler(
         await NotificationService.showSmsErrorNotification(
             'Could not parse transaction from SMS.');
       }
-      return false;
+      return SmsHandlerOutcome.skipped;
     }
     if (!isPlausibleTransactionDate(txDate)) {
       await _markProcessed(fingerprint, prefs);
@@ -359,7 +367,7 @@ Future<bool> backgroundSmsHandler(
         await NotificationService.showSmsErrorNotification(
             'SMS auto-detect error: transaction date is invalid.');
       }
-      return false;
+      return SmsHandlerOutcome.skipped;
     }
 
     final resolvedDirection = aiParsed?.parsed.type ?? localResult.direction;
@@ -507,12 +515,12 @@ Future<bool> backgroundSmsHandler(
         transactionId: saved.id,
       );
     }
-    return true;
+    return SmsHandlerOutcome.created;
   } catch (e) {
     if (!isManualSync) {
       await NotificationService.showSmsErrorNotification('SMS auto-detect error: $e');
     }
-    return false;
+    return SmsHandlerOutcome.failed;
   }
 }
 
@@ -535,6 +543,7 @@ class SmsSyncResult {
   const SmsSyncResult({
     required this.scanned,
     required this.created,
+    this.failed = 0,
     this.error,
   });
 
@@ -543,6 +552,12 @@ class SmsSyncResult {
 
   /// How many of those actually produced a new transaction.
   final int created;
+
+  /// How many candidates threw while being processed (a transient AI
+  /// failure, a Firestore error) rather than being cleanly skipped as
+  /// already-handled or unparseable. Lets the caller distinguish "nothing
+  /// new to do" from "something went wrong" even when [created] is 0.
+  final int failed;
 
   /// Set only when the scan couldn't run at all (not signed in, inbox
   /// unreadable) — distinct from "scanned some, created none", which is
@@ -624,12 +639,35 @@ class SmsService {
     }
 
     var created = 0;
-    for (final message in candidates) {
-      final didCreate =
-          await backgroundSmsHandler(message, isManualSync: true);
-      if (didCreate) created++;
+    var failed = 0;
+    // backgroundSmsHandler sets NotificationService.notificationsEnabled
+    // (a process-wide static) to false on every isManualSync call, since a
+    // 20-message catch-up firing 20 toasts would be noise — but that flag
+    // isn't scoped to this call, so it must be restored once the loop is
+    // done or every notification (including for manually added/edited
+    // transactions) stays silently suppressed until a live SMS arrives or
+    // the app restarts.
+    final previousNotificationsEnabled = NotificationService.notificationsEnabled;
+    try {
+      for (final message in candidates) {
+        final outcome =
+            await backgroundSmsHandler(message, isManualSync: true);
+        switch (outcome) {
+          case SmsHandlerOutcome.created:
+            created++;
+            break;
+          case SmsHandlerOutcome.failed:
+            failed++;
+            break;
+          case SmsHandlerOutcome.skipped:
+            break;
+        }
+      }
+    } finally {
+      NotificationService.notificationsEnabled = previousNotificationsEnabled;
     }
 
-    return SmsSyncResult(scanned: candidates.length, created: created);
+    return SmsSyncResult(
+        scanned: candidates.length, created: created, failed: failed);
   }
 }

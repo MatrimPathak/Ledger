@@ -231,33 +231,47 @@ class SmsProcessingWorker(
                 put("creditCardAccountId", linkedCreditCardAccountId)
             }
 
-            val txRef = db.collection("users").document(uid).collection("transactions").document()
+            // Deterministic doc id (not an auto-generated one) so this write
+            // is idempotent: if the Dart pull-to-refresh catch-up scan
+            // (sms_service.dart's syncMissedSms) races this worker for the
+            // *same* source SMS — e.g. it was enqueued just before the user
+            // opened the app and pulled to refresh — both compute the exact
+            // same id via dedupTransactionDocId, and the existence check
+            // below (inside the same atomic transaction as the write) makes
+            // the loser a no-op instead of a duplicate transaction with a
+            // duplicate balance adjustment.
+            val txRef = db.collection("users").document(uid).collection("transactions")
+                .document(dedupTransactionDocId(uid, local.referenceNumber, sourceMessageHash, txDate))
             db.runTransaction { transaction ->
-                transaction.set(txRef, txMap)
-                if (resolvedAccountId != null && affectsBalance) {
-                    val delta = if (txType == "income") resolvedAmount else -resolvedAmount
-                    transaction.update(
-                        db.collection("users").document(uid)
-                            .collection("accounts").document(resolvedAccountId),
-                        "balance", FieldValue.increment(delta),
-                    )
-                }
-                // Credit-card purchases grow outstanding; bill payments shrink
-                // it — never double-counted against the bank balance, since
-                // affectsBalance is already false for the creditCard payment
-                // mode on the purchase leg (mirrors sms_service.dart).
-                if (linkedCreditCardAccountId != null) {
-                    val outstandingDelta = when (txnCategory) {
-                        "creditCardPurchase" -> resolvedAmount
-                        "creditCardPayment" -> -resolvedAmount
-                        else -> null
-                    }
-                    if (outstandingDelta != null) {
+                val existing = transaction.get(txRef)
+                if (!existing.exists()) {
+                    transaction.set(txRef, txMap)
+                    if (resolvedAccountId != null && affectsBalance) {
+                        val delta = if (txType == "income") resolvedAmount else -resolvedAmount
                         transaction.update(
                             db.collection("users").document(uid)
-                                .collection("creditCardAccounts").document(linkedCreditCardAccountId),
-                            "currentOutstanding", FieldValue.increment(outstandingDelta),
+                                .collection("accounts").document(resolvedAccountId),
+                            "balance", FieldValue.increment(delta),
                         )
+                    }
+                    // Credit-card purchases grow outstanding; bill payments
+                    // shrink it — never double-counted against the bank
+                    // balance, since affectsBalance is already false for the
+                    // creditCard payment mode on the purchase leg (mirrors
+                    // sms_service.dart).
+                    if (linkedCreditCardAccountId != null) {
+                        val outstandingDelta = when (txnCategory) {
+                            "creditCardPurchase" -> resolvedAmount
+                            "creditCardPayment" -> -resolvedAmount
+                            else -> null
+                        }
+                        if (outstandingDelta != null) {
+                            transaction.update(
+                                db.collection("users").document(uid)
+                                    .collection("creditCardAccounts").document(linkedCreditCardAccountId),
+                                "currentOutstanding", FieldValue.increment(outstandingDelta),
+                            )
+                        }
                     }
                 }
             }.await()
@@ -364,6 +378,32 @@ class SmsProcessingWorker(
         val digest = MessageDigest.getInstance("SHA-256")
             .digest("$bankCode|$skeleton".toByteArray(Charsets.UTF_8))
         return digest.joinToString("") { "%02x".format(it) }.take(32)
+    }
+
+    // Mirrors FirestoreService._dedupTransactionDocId in firestore_service.dart
+    // field-for-field (same key format, same un-truncated SHA-256 hex) so this
+    // worker and the Dart pull-to-refresh path compute an identical doc id for
+    // the same source SMS. Bucketing the fallback key by a 2-minute window
+    // (rather than the exact millisecond) still keeps two independent
+    // transactions that happen to hash identically — the same wording from a
+    // recurring merchant, weeks apart — on separate documents; two attempts to
+    // process the *same* SMS always share the same txDate, so they always land
+    // in the same bucket regardless of which pipeline processes it first.
+    private fun dedupTransactionDocId(
+        uid: String,
+        externalTransactionId: String?,
+        sourceMessageHash: String,
+        txDate: Date,
+    ): String {
+        val ref = externalTransactionId?.takeIf { it.isNotBlank() }
+        val key = if (ref != null) {
+            "ref:$ref"
+        } else {
+            "hash:$sourceMessageHash:${txDate.time / (2 * 60 * 1000)}"
+        }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest("$uid|$key".toByteArray(Charsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
     }
 
     private suspend fun upsertSmsTemplate(db: FirebaseFirestore, template: SmsTemplate) {

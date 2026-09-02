@@ -72,10 +72,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (result.error != null) {
       messenger.showSnackBar(SnackBar(content: Text(result.error!)));
     } else if (result.created > 0) {
+      final failedSuffix =
+          result.failed > 0 ? ' (${result.failed} failed, will retry)' : '';
       messenger.showSnackBar(SnackBar(
-        content: Text(result.created == 1
-            ? 'Found and added 1 transaction'
-            : 'Found and added ${result.created} transactions'),
+        content: Text((result.created == 1
+                ? 'Found and added 1 transaction'
+                : 'Found and added ${result.created} transactions') +
+            failedSuffix),
+      ));
+    } else if (result.failed > 0) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(result.failed == 1
+            ? 'Could not process 1 message — will retry next time'
+            : 'Could not process ${result.failed} messages — will retry next time'),
       ));
     } else {
       messenger.showSnackBar(const SnackBar(content: Text("You're all caught up")));

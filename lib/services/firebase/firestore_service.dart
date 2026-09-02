@@ -244,17 +244,53 @@ class FirestoreService {
     await _transactions(uid).doc(txId).delete();
   }
 
+  /// Deterministic doc id for a bank-parsed transaction (one with a
+  /// [app_model.Transaction.sourceMessageHash]), so two concurrent writers
+  /// racing to record the *same* source SMS — e.g. the pull-to-refresh
+  /// catch-up scan and the native background worker both picking up a
+  /// message that was enqueued just before the app opened — collide on the
+  /// same document instead of each creating its own transaction and
+  /// double-applying the balance adjustment. Bucketing by a coarse time
+  /// window (rather than the exact millisecond) still keeps two
+  /// independent transactions that legitimately hash identically (the same
+  /// recurring-merchant wording recurring weeks apart) on separate
+  /// documents, mirroring [transactionExistsByHashNearby]'s window; two
+  /// attempts to process the *same* SMS always share the same
+  /// [app_model.Transaction.date] (it comes from the message itself), so
+  /// they always land in the same bucket.
+  static String _dedupTransactionDocId(app_model.Transaction tx) {
+    final ref = tx.externalTransactionId;
+    final key = (ref != null && ref.isNotEmpty)
+        ? 'ref:$ref'
+        : 'hash:${tx.sourceMessageHash}:${tx.date.millisecondsSinceEpoch ~/ (2 * 60 * 1000)}';
+    return sha256.convert(utf8.encode('${tx.userId}|$key')).toString();
+  }
+
   /// Creates [tx] and applies every [balanceAdjustments]/
   /// [creditCardAdjustments] increment in a single atomic write, so a
   /// crash mid-write can no longer desync the transaction doc from the
   /// account balance or card outstanding it affects.
+  ///
+  /// For SMS-sourced transactions this is also idempotent: the existence
+  /// check and the write happen inside the same Firestore transaction
+  /// keyed by a deterministic doc id, so a concurrent duplicate attempt for
+  /// the same source SMS is a no-op instead of a second transaction with a
+  /// second balance adjustment. Manually entered transactions (no
+  /// [app_model.Transaction.sourceMessageHash]) keep an auto-generated id,
+  /// since dedup doesn't apply to them.
   Future<app_model.Transaction> createTransactionWithBalanceUpdate(
     app_model.Transaction tx, {
     List<BalanceAdjustment> balanceAdjustments = const [],
     List<CreditCardAdjustment> creditCardAdjustments = const [],
   }) async {
-    final docRef = _transactions(tx.userId).doc();
+    final docRef = tx.sourceMessageHash != null
+        ? _transactions(tx.userId).doc(_dedupTransactionDocId(tx))
+        : _transactions(tx.userId).doc();
     await _db.runTransaction((transaction) async {
+      if (tx.sourceMessageHash != null) {
+        final existing = await transaction.get(docRef);
+        if (existing.exists) return;
+      }
       transaction.set(docRef, tx.toFirestore());
       for (final adjustment in balanceAdjustments) {
         transaction.update(
