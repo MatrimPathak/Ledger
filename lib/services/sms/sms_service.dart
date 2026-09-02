@@ -137,36 +137,65 @@ Future<Category> resolveOrCreateCategory({
 }
 
 // Top-level background SMS handler — runs in a separate isolate
+//
+// [isManualSync] is set only by SmsService.syncMissedSms (the "pull to
+// refresh" catch-up scan). It changes three things, all in service of
+// retrying a message the live path never turned into a transaction,
+// rather than treating "we looked at this once" as "this is handled":
+//  - the auto-detect toggle and the last-processed watermark are ignored,
+//    since a deliberate manual sync should work regardless of live
+//    settings and should be able to look further back than "since last
+//    time";
+//  - the device-local fingerprint "already processed" flag is ignored —
+//    it's set even when a message was attempted and produced nothing
+//    (ambiguous parse, a transient AI failure), so trusting it here
+//    would make those permanently unrecoverable. The Firestore-side
+//    hash/reference existence checks further down are the real dedup
+//    authority for this path: they only skip a message that actually
+//    has a transaction.
+//  - per-message notifications are suppressed (a 20-message catch-up
+//    firing 20 "processing…" toasts is noise); the caller shows one
+//    summary instead.
+//
+// Returns true iff this call created a transaction, so callers can count
+// results — the live path (isManualSync: false) ignores the return value.
 @pragma('vm:entry-point')
-Future<void> backgroundSmsHandler(SmsMessage message) async {
+Future<bool> backgroundSmsHandler(
+  SmsMessage message, {
+  bool isManualSync = false,
+}) async {
   final body = message.body ?? '';
-  if (!await BankSmsFilter.looksLikeBankSms(body)) return;
+  if (!await BankSmsFilter.looksLikeBankSms(body)) return false;
 
   final prefs = await SharedPreferences.getInstance();
-  if (prefs.getBool(AppConstants.prefKeyAutoDetect) != true) return;
-
-  // Timestamp watermark: skip if already processed via catch-up.
-  final smsTimestamp = message.date;
-  if (smsTimestamp != null) {
-    final lastProcessed = prefs.getInt(AppConstants.prefKeyLastSmsTimestamp) ?? 0;
-    if (smsTimestamp <= lastProcessed) return;
+  if (!isManualSync && prefs.getBool(AppConstants.prefKeyAutoDetect) != true) {
+    return false;
   }
 
-  // Fingerprint dedup: handles null-date messages and concurrent isolate races.
+  // Timestamp watermark: skip if already processed via catch-up. Manual
+  // sync deliberately ignores this — it exists to look further back.
+  final smsTimestamp = message.date;
+  if (!isManualSync && smsTimestamp != null) {
+    final lastProcessed = prefs.getInt(AppConstants.prefKeyLastSmsTimestamp) ?? 0;
+    if (smsTimestamp <= lastProcessed) return false;
+  }
+
+  // Fingerprint dedup: handles null-date messages and concurrent isolate
+  // races. Manual sync skips this — see the function doc comment above.
   final fingerprint = _smsFingerprint(message);
-  if (_isAlreadyProcessed(fingerprint, prefs)) return;
+  if (!isManualSync && _isAlreadyProcessed(fingerprint, prefs)) return false;
 
   // E-mandate / NACH pre-debit notifications are not real transactions — the
   // actual debit arrives as a separate SMS. Skip them entirely so they never
   // appear in the transaction list.
   if (_isPreDebitNotification(body)) {
     await _markProcessed(fingerprint, prefs);
-    return;
+    return false;
   }
 
   // Honour the user's notification preference in the background isolate.
   NotificationService.notificationsEnabled =
-      prefs.getBool(AppConstants.prefKeyNotifications) ?? true;
+      !isManualSync && (prefs.getBool(AppConstants.prefKeyNotifications) ?? true);
 
   try {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -175,7 +204,7 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
   }
 
   await NotificationService.initialize();
-  await NotificationService.showProcessingNotification();
+  if (!isManualSync) await NotificationService.showProcessingNotification();
 
   try {
     final uid = resolveBackgroundSmsUid(
@@ -183,8 +212,10 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       prefs: prefs,
     );
     if (uid == null || uid.isEmpty) {
-      await NotificationService.showSmsErrorNotification('Not signed in — open Ledger once to re-authenticate.');
-      return;
+      if (!isManualSync) {
+        await NotificationService.showSmsErrorNotification('Not signed in — open Ledger once to re-authenticate.');
+      }
+      return false;
     }
 
     final firestoreService = FirestoreService();
@@ -237,14 +268,14 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
           uid, localResult.referenceNumber!);
       if (exists) {
         await _markProcessed(fingerprint, prefs);
-        return;
+        return false;
       }
     } else {
       final exists = await firestoreService.transactionExistsByHashNearby(
           uid, sourceMessageHash, txDate);
       if (exists) {
         await _markProcessed(fingerprint, prefs);
-        return;
+        return false;
       }
     }
 
@@ -316,17 +347,19 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
       // behavior for genuinely unparseable content, which is correct: an
       // absent amount is not a financial event, not a transaction to lose.
       await _markProcessed(fingerprint, prefs);
-      if (aiParsed == null && !localResult.isHighConfidence) {
+      if (!isManualSync && aiParsed == null && !localResult.isHighConfidence) {
         await NotificationService.showSmsErrorNotification(
             'Could not parse transaction from SMS.');
       }
-      return;
+      return false;
     }
     if (!isPlausibleTransactionDate(txDate)) {
       await _markProcessed(fingerprint, prefs);
-      await NotificationService.showSmsErrorNotification(
-          'SMS auto-detect error: transaction date is invalid.');
-      return;
+      if (!isManualSync) {
+        await NotificationService.showSmsErrorNotification(
+            'SMS auto-detect error: transaction date is invalid.');
+      }
+      return false;
     }
 
     final resolvedDirection = aiParsed?.parsed.type ?? localResult.direction;
@@ -466,14 +499,20 @@ Future<void> backgroundSmsHandler(SmsMessage message) async {
         processingStatus == tx_model.TxnProcessingStatus.needsAiReview
             ? ' · Needs review'
             : '';
-    await NotificationService.showTransactionDetectedNotification(
-      id: now.millisecondsSinceEpoch ~/ 1000,
-      title: NotificationService.buildNotificationTitle(title, resolvedAmount, currency),
-      body: 'Auto-detected$reviewSuffix · Tap to review in Ledger',
-      transactionId: saved.id,
-    );
+    if (!isManualSync) {
+      await NotificationService.showTransactionDetectedNotification(
+        id: now.millisecondsSinceEpoch ~/ 1000,
+        title: NotificationService.buildNotificationTitle(title, resolvedAmount, currency),
+        body: 'Auto-detected$reviewSuffix · Tap to review in Ledger',
+        transactionId: saved.id,
+      );
+    }
+    return true;
   } catch (e) {
-    await NotificationService.showSmsErrorNotification('SMS auto-detect error: $e');
+    if (!isManualSync) {
+      await NotificationService.showSmsErrorNotification('SMS auto-detect error: $e');
+    }
+    return false;
   }
 }
 
@@ -488,6 +527,27 @@ tx_model.TxnCategory _resolveTxnCategory(
 class ClaudeParsedResult {
   ClaudeParsedResult(this.parsed);
   final ParsedSmsTransaction parsed;
+}
+
+/// Outcome of [SmsService.syncMissedSms] — what the pull-to-refresh catch-up
+/// scan found, for the UI to summarize (e.g. a SnackBar).
+class SmsSyncResult {
+  const SmsSyncResult({
+    required this.scanned,
+    required this.created,
+    this.error,
+  });
+
+  /// How many bank-like SMS in the scan window were looked at.
+  final int scanned;
+
+  /// How many of those actually produced a new transaction.
+  final int created;
+
+  /// Set only when the scan couldn't run at all (not signed in, inbox
+  /// unreadable) — distinct from "scanned some, created none", which is
+  /// success with nothing to do.
+  final String? error;
 }
 
 class SmsService {
@@ -509,5 +569,67 @@ class SmsService {
       },
       listenInBackground: false,
     );
+  }
+
+  /// Pull-to-refresh catch-up: re-scans the SMS inbox for bank-like
+  /// messages from the last [lookbackDays] and retries parsing on any that
+  /// don't yet have a transaction — including ones the live path already
+  /// attempted and failed on (a transient AI error, an ambiguous message
+  /// that's since been fixed by a rule/template update). See
+  /// backgroundSmsHandler's doc comment for exactly what "manual sync"
+  /// changes about its dedup behavior.
+  ///
+  /// Runs candidates sequentially, not in parallel — each may call the
+  /// Claude API, and a burst of concurrent calls against one user's key
+  /// serves nobody faster. A message already backed by a transaction is
+  /// cheap to re-check (one local parse + one Firestore read, no AI call),
+  /// so re-running this repeatedly only pays full cost for messages that
+  /// are genuinely still unresolved.
+  Future<SmsSyncResult> syncMissedSms({int lookbackDays = 30}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final uid = resolveBackgroundSmsUid(
+      firebaseAuthUid: FirebaseAuth.instance.currentUser?.uid,
+      prefs: prefs,
+    );
+    if (uid == null || uid.isEmpty) {
+      return const SmsSyncResult(
+          scanned: 0, created: 0, error: 'Not signed in.');
+    }
+
+    List<SmsMessage> messages;
+    try {
+      final cutoff = DateTime.now()
+          .subtract(Duration(days: lookbackDays))
+          .millisecondsSinceEpoch;
+      messages = await _telephony.getInboxSms(
+        columns: [
+          SmsColumn.ADDRESS,
+          SmsColumn.BODY,
+          SmsColumn.DATE,
+          SmsColumn.ID,
+        ],
+        filter: SmsFilter.where(SmsColumn.DATE).greaterThan(cutoff.toString()),
+        sortOrder: [OrderBy(SmsColumn.DATE)],
+      );
+    } catch (e) {
+      return SmsSyncResult(
+          scanned: 0, created: 0, error: 'Could not read SMS inbox: $e');
+    }
+
+    final candidates = <SmsMessage>[];
+    for (final m in messages) {
+      if (await BankSmsFilter.looksLikeBankSms(m.body ?? '')) {
+        candidates.add(m);
+      }
+    }
+
+    var created = 0;
+    for (final message in candidates) {
+      final didCreate =
+          await backgroundSmsHandler(message, isManualSync: true);
+      if (didCreate) created++;
+    }
+
+    return SmsSyncResult(scanned: candidates.length, created: created);
   }
 }

@@ -13,6 +13,7 @@ import '../../../providers/payment_modes_provider.dart';
 import '../../../providers/settings_provider.dart';
 import '../../../providers/transactions_provider.dart';
 import '../../../services/battery_optimization_service.dart';
+import '../../../services/sms/sms_service.dart';
 import '../widgets/account_month_filter.dart';
 import '../widgets/category_bar_chart.dart';
 import '../widgets/summary_card.dart';
@@ -58,6 +59,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     }
   }
 
+  // Pull-to-refresh catch-up: re-scans the SMS inbox for bank messages that
+  // never turned into a transaction (background detection missed them, or
+  // an earlier attempt failed) and retries them now. Transactions it
+  // creates land via the normal Firestore write path, so the existing live
+  // providers above pick them up on their own — this only needs to run the
+  // scan and report what happened.
+  Future<void> _handleRefresh() async {
+    final result = await SmsService().syncMissedSms();
+    if (!mounted) return;
+    final messenger = ScaffoldMessenger.of(context);
+    if (result.error != null) {
+      messenger.showSnackBar(SnackBar(content: Text(result.error!)));
+    } else if (result.created > 0) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(result.created == 1
+            ? 'Found and added 1 transaction'
+            : 'Found and added ${result.created} transactions'),
+      ));
+    } else {
+      messenger.showSnackBar(const SnackBar(content: Text("You're all caught up")));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -81,7 +105,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         data: (transactions) {
           final grouped = _groupByDate(transactions);
 
-          return CustomScrollView(
+          return RefreshIndicator(
+            onRefresh: _handleRefresh,
+            child: CustomScrollView(
             slivers: [
               SliverAppBar(
                 floating: true,
@@ -201,6 +227,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 ),
               const SliverToBoxAdapter(child: SizedBox(height: 100)),
             ],
+            ),
           );
         },
       ),
