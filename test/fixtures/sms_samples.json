@@ -77,6 +77,21 @@
       }
     },
     {
+      "id": "upi_credit_numeric_vpa_not_mistaken_for_reference_medium_confidence",
+      "body": "Rs.500.00 credited to A/C XX1234 from UPI 9876543210@okaxis on 02-09-26",
+      "expected": {
+        "amount": 500.0,
+        "direction": "credit",
+        "paymentMethod": "upi",
+        "txnCategoryHint": null,
+        "referenceNumber": null,
+        "merchantCandidate": "9876543210@okaxis",
+        "accountLastDigits": "1234",
+        "matchedRuleId": "upi_credit",
+        "tier": "medium"
+      }
+    },
+    {
       "id": "bank_debit_neft_medium_confidence",
       "body": "INR 12000.00 debited from your account for NEFT transfer. Avl Bal INR 45000.00",
       "expected": {
