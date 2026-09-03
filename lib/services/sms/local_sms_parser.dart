@@ -264,10 +264,18 @@ class LocalSmsParser {
     if (pattern == null) return null;
     final regex = RegExp(pattern, caseSensitive: false);
     final match = regex.firstMatch(body);
+    if (match == null) return null;
+    // Most patterns have exactly one capture group. A few (e.g. a
+    // reference-number pattern with a second alternative for a different
+    // bank's convention) have two, of which only one participates per
+    // match — group(n) throws if n exceeds the pattern's declared group
+    // count, so this only reaches for group 2 when the pattern actually
+    // declares one.
+    final raw = match.group(1) ??
+        (match.groupCount >= 2 ? match.group(2) : null);
     // Collapse whitespace runs (e.g. a stray double space in the source
     // SMS) so an extracted merchant name doesn't carry it into the UI.
-    final group =
-        match?.group(1)?.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final group = raw?.trim().replaceAll(RegExp(r'\s+'), ' ');
     return (group == null || group.isEmpty) ? null : group;
   }
 
