@@ -374,6 +374,85 @@ void main() {
     });
   });
 
+  group('FirestoreService.createTransactionWithBalanceUpdate idempotency',
+      () {
+    test(
+        'a second write for the same source SMS (same hash + date) is a '
+        'no-op instead of a duplicate transaction and balance adjustment',
+        () async {
+      final firestore = FakeFirebaseFirestore();
+      final service = FirestoreService(firestore: firestore);
+      final accounts = firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('accounts');
+      await accounts.doc('checking').set({'balance': 1000});
+
+      // Simulates the pull-to-refresh catch-up scan attempting the same SMS
+      // the native background worker already recorded (or vice versa): both
+      // build an equivalent Transaction (same sourceMessageHash + date) and
+      // call this method — the deterministic doc id plus the existence
+      // check inside the same atomic Firestore transaction is what real
+      // concurrent callers rely on to avoid a race; this exercises that
+      // same mechanism sequentially, which a single-threaded fake Firestore
+      // can assert deterministically.
+      final txDate = DateTime.utc(2026, 6, 1, 12, 0);
+      app_model.Transaction buildTx() => _newTransaction(amount: 250).copyWith(
+            date: txDate,
+            sourceMessageHash: () => 'hash-race',
+          );
+      const adjustments = [
+        BalanceAdjustment(accountId: 'checking', delta: -250),
+      ];
+
+      final first = await service.createTransactionWithBalanceUpdate(
+        buildTx(),
+        balanceAdjustments: adjustments,
+      );
+      final second = await service.createTransactionWithBalanceUpdate(
+        buildTx(),
+        balanceAdjustments: adjustments,
+      );
+
+      final snap = await firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('transactions')
+          .get();
+      expect(snap.docs, hasLength(1));
+      expect(second.id, first.id);
+      expect((await accounts.doc('checking').get()).data()!['balance'], 750);
+    });
+
+    test(
+        'two transactions with the same wording but more than the dedup '
+        'window apart still each get their own document',
+        () async {
+      final firestore = FakeFirebaseFirestore();
+      final service = FirestoreService(firestore: firestore);
+
+      await service.createTransactionWithBalanceUpdate(
+        _newTransaction().copyWith(
+          date: DateTime.utc(2026, 6, 1, 12, 0),
+          sourceMessageHash: () => 'hash-recurring',
+        ),
+      );
+      await service.createTransactionWithBalanceUpdate(
+        _newTransaction().copyWith(
+          date: DateTime.utc(2026, 6, 15, 12, 0),
+          sourceMessageHash: () => 'hash-recurring',
+        ),
+      );
+
+      final snap = await firestore
+          .collection('users')
+          .doc('user-1')
+          .collection('transactions')
+          .get();
+      expect(snap.docs, hasLength(2));
+    });
+  });
+
   group('FirestoreService dedup checks', () {
     test('transactionExistsByExternalRef finds a matching reference number',
         () async {
